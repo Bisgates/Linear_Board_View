@@ -14,6 +14,7 @@ import {
 import type { IssueRecord } from "../linear/types";
 import { computeInitialLayout } from "../lib/layout";
 import { loadPositions, pruneOrphans, savePositions, type PositionMap } from "../lib/persistence";
+import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import { IssueCard } from "./IssueCard";
 
 const NODE_TYPES: NodeTypes = { issue: IssueCard as unknown as NodeTypes[string] };
@@ -118,17 +119,8 @@ function BoardInner({ issues, onSelectIssue, selectedId }: BoardProps) {
         nodesConnectable={false}
         nodesFocusable={false}
         edgesFocusable={false}
-        panOnScroll
-        zoomOnScroll={false}
-        zoomOnPinch
-        zoomOnDoubleClick={false}
-        panOnDrag
-        preventScrolling
-        minZoom={0.2}
-        maxZoom={2.5}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        proOptions={{ hideAttribution: true }}
+        deleteKeyCode={null}
+        {...SHARED_FLOW_PROPS}
       >
         <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
         <Controls position="bottom-right" showInteractive={false} />

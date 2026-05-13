@@ -1,6 +1,9 @@
 import type { XY } from "./layout";
 
-const KEY = "linear_board_view:positions:v1";
+// Bumped to v3 with the team-horizontal / project-per-row compact layout.
+// Old positions stay under v1 / v2 keys but are ignored. To restore prior
+// hand-placed positions, clear the new key in DevTools or migrate manually.
+const KEY = "linear_board_view:positions:v3";
 
 export type PositionMap = Record<string, XY>;
 

@@ -7,7 +7,6 @@ import {
   MiniMap,
   ConnectionMode,
   MarkerType,
-  SelectionMode,
   applyNodeChanges,
   type Edge,
   type EdgeTypes,
@@ -22,6 +21,7 @@ import { IssueCard } from "./IssueCard";
 import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { WorkingOnContextMenu, type ContextMenuTarget } from "./WorkingOnContextMenu";
+import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { WorkingOnData, WorkingOnEdge } from "../lib/workingOn";
 import { shortId } from "../lib/workingOn";
 
@@ -391,19 +391,7 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
         nodesConnectable
         nodesFocusable={false}
         edgesFocusable
-        panOnScroll
-        zoomOnScroll={false}
-        zoomOnPinch
-        zoomOnDoubleClick={false}
-        selectionOnDrag
-        selectionMode={SelectionMode.Partial}
-        panOnDrag={[1]}
-        preventScrolling
-        minZoom={0.2}
-        maxZoom={2.5}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        proOptions={{ hideAttribution: true }}
+        {...SHARED_FLOW_PROPS}
       >
         <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
         <Controls position="bottom-right" showInteractive={false} />
