@@ -8,6 +8,7 @@ import { LinearClient } from "@linear/sdk";
 import { fetchAllIssues } from "../linear/fetchIssues.js";
 import { updateIssue, type IssuePatch } from "../linear/updateIssue.js";
 import { fetchAllWorkflowStates } from "../linear/fetchWorkflowStates.js";
+import { readWorkingOn, writeWorkingOn } from "./workingOnStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,6 +39,26 @@ export function linearApiPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
+
+        // GET /api/working-on  (no Linear client required — local file only)
+        if (url === "/api/working-on" && req.method === "GET") {
+          try {
+            const data = await readWorkingOn();
+            return sendJson(res, 200, data);
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+        // PUT /api/working-on
+        if (url === "/api/working-on" && req.method === "PUT") {
+          try {
+            const body = await readJson(req);
+            const saved = await writeWorkingOn(body);
+            return sendJson(res, 200, { ok: true, data: saved });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
 
         if (!client) {
           if (url.startsWith("/api/")) {

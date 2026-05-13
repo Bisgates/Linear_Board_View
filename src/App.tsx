@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Board from "./components/Board";
-import { TopBar } from "./components/TopBar";
+import WorkingOnBoard from "./components/WorkingOnBoard";
+import { TopBar, type ActiveView } from "./components/TopBar";
 import { FilterBar } from "./components/FilterBar";
 import { DetailPanel } from "./components/DetailPanel";
+import { IssuePickerPopover } from "./components/IssuePickerPopover";
 import { ToastStack, type ToastItem } from "./components/Toast";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
+import { useWorkingOnState } from "./lib/useWorkingOnState";
+import { findNextSlot } from "./lib/workingOn";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
 
@@ -20,6 +24,7 @@ export default function App() {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [activeView, setActiveView] = useState<ActiveView>("all");
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -28,6 +33,8 @@ export default function App() {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const workingOn = useWorkingOnState((e) => pushToast("error", `Working-on save failed: ${String(e)}`));
 
   useEffect(() => {
     (async () => {
@@ -65,11 +72,9 @@ export default function App() {
   const mutate = useCallback(
     async (id: string, patch: IssuePatch): Promise<void> => {
       if (!snapshot) return;
-      // Snapshot previous for rollback.
       const prevIssue = snapshot.issues.find((i) => i.id === id);
       if (!prevIssue) return;
 
-      // Optimistic: build a best-effort updated record from the patch.
       const lookups = (() => {
         const states = new Map<string, IssueRecord["state"]>();
         const projects = new Map<string, IssueRecord["project"]>();
@@ -83,8 +88,6 @@ export default function App() {
           if (i.assignee) assignees.set(i.assignee.id, i.assignee);
           for (const l of i.labels) labels.set(l.id, l);
         }
-        // Augment states with workspace-level metadata (so newly picked states
-        // not present in the open snapshot — e.g. "Done" — can still be optimistically applied).
         for (const w of snapshot.meta?.workflowStates ?? []) {
           if (!states.has(w.id)) {
             states.set(w.id, { id: w.id, name: w.name, type: w.type });
@@ -116,7 +119,6 @@ export default function App() {
           .filter((l): l is NonNullable<typeof l> => Boolean(l));
       }
 
-      // Apply optimistic update.
       setSnapshot((prev) => {
         if (!prev) return prev;
         return {
@@ -133,7 +135,6 @@ export default function App() {
         });
         const json = (await res.json()) as { ok: boolean; issue?: IssueRecord; error?: string };
         if (!json.ok || !json.issue) throw new Error(json.error ?? "mutation failed");
-        // Replace with server-authoritative record.
         setSnapshot((prev) => {
           if (!prev) return prev;
           return {
@@ -144,7 +145,6 @@ export default function App() {
         const field = Object.keys(patch)[0] ?? "issue";
         console.log(`[mutation] field=${field} ok`);
       } catch (e) {
-        // Rollback.
         setSnapshot((prev) => {
           if (!prev) return prev;
           return {
@@ -163,12 +163,36 @@ export default function App() {
     () => (snapshot ? maybeSynthesize(snapshot.issues) : []),
     [snapshot],
   );
+  const issuesById = useMemo(() => {
+    const m = new Map<string, IssueRecord>();
+    for (const i of allIssues) m.set(i.id, i);
+    return m;
+  }, [allIssues]);
   const options = useMemo(() => deriveOptions(allIssues), [allIssues]);
   const filtered = useMemo(() => applyFilter(allIssues, filter), [allIssues, filter]);
   const selectedIssue = useMemo(
     () => (selectedId ? allIssues.find((i) => i.id === selectedId) ?? null : null),
     [selectedId, allIssues],
   );
+
+  const workingOnIds = useMemo(() => new Set(Object.keys(workingOn.data.issueMembers)), [workingOn.data.issueMembers]);
+
+  const addToWorkingOn = useCallback(
+    (issueId: string) => {
+      workingOn.setData((prev) => {
+        if (prev.issueMembers[issueId]) return prev;
+        const taken: { x: number; y: number }[] = [];
+        for (const p of Object.values(prev.issueMembers)) taken.push(p);
+        for (const n of prev.noteNodes) taken.push({ x: n.x, y: n.y });
+        const slot = findNextSlot(taken);
+        return { ...prev, issueMembers: { ...prev.issueMembers, [issueId]: slot } };
+      });
+    },
+    [workingOn],
+  );
+
+  const displayCount = activeView === "all" ? filtered.length : workingOnIds.size;
+  const displayTotal = activeView === "all" ? allIssues.length : undefined;
 
   return (
     <div
@@ -183,16 +207,36 @@ export default function App() {
         lastSyncAt={lastSyncAt}
         syncing={syncing}
         onRefresh={refresh}
-        issueCount={filtered.length}
-        totalCount={allIssues.length}
+        issueCount={displayCount}
+        totalCount={displayTotal}
+        activeView={activeView}
+        onViewChange={setActiveView}
+        leftSlot={
+          activeView === "working_on" ? (
+            <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
+          ) : null
+        }
       />
-      <FilterBar filter={filter} options={options} onChange={setFilter} />
+      {activeView === "all" && (
+        <FilterBar filter={filter} options={options} onChange={setFilter} />
+      )}
       <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex" }}>
         <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
           {error && (
             <div style={{ padding: 20, color: "var(--warm-red)" }}>{error}</div>
           )}
-          <Board issues={filtered} onSelectIssue={setSelectedId} selectedId={selectedId} />
+          {activeView === "all" ? (
+            <Board issues={filtered} onSelectIssue={setSelectedId} selectedId={selectedId} />
+          ) : (
+            <WorkingOnBoard
+              data={workingOn.data}
+              loaded={workingOn.loaded}
+              issuesById={issuesById}
+              setData={workingOn.setData}
+              onSelectIssue={setSelectedId}
+              selectedIssueId={selectedId}
+            />
+          )}
         </div>
         {selectedIssue && (
           <DetailPanel

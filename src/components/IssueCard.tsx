@@ -1,7 +1,14 @@
 import { memo } from "react";
-import type { NodeProps } from "@xyflow/react";
+import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { IssueRecord } from "../linear/types";
 import { projectColor } from "../lib/projectColor";
+
+const HANDLE_STYLE: React.CSSProperties = {
+  width: 10,
+  height: 10,
+  background: "var(--paper)",
+  border: "1.5px solid var(--ink-soft)",
+};
 
 const PRIORITY_LABEL: Record<number, string> = {
   0: "none",
@@ -70,6 +77,10 @@ function IssueCardImpl({ data, selected }: Props) {
         transition: "box-shadow 0.12s",
       }}
     >
+      <Handle id="t" type="source" position={Position.Top} style={HANDLE_STYLE} />
+      <Handle id="r" type="source" position={Position.Right} style={HANDLE_STYLE} />
+      <Handle id="b" type="source" position={Position.Bottom} style={HANDLE_STYLE} />
+      <Handle id="l" type="source" position={Position.Left} style={HANDLE_STYLE} />
       {/* top row: project + identifier */}
       <div
         style={{
