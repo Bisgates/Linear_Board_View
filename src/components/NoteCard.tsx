@@ -129,11 +129,13 @@ function NoteCardImpl({ data, selected }: Props) {
       }}
       style={{
         width: 280,
-        background: "var(--paper-soft)",
-        border: `2px solid ${color}`,
-        borderLeft: `6px solid ${color}`,
-        borderRadius: 8,
-        padding: "10px 12px",
+        // The outer block is the color "frame" itself; the inner paper card
+        // sits inside with concentric corner radii so the left stripe + top /
+        // right / bottom border curve smoothly into each other (Apple HIG —
+        // nested rounded rects use concentric, not stacked, corners).
+        background: color,
+        padding: "2px 2px 2px 6px",
+        borderRadius: 10,
         boxShadow: selected
           ? `0 0 0 3px ${color}40, 0 4px 14px rgba(26,24,20,0.12)`
           : "0 1px 0 rgba(26,24,20,0.04)",
@@ -147,6 +149,15 @@ function NoteCardImpl({ data, selected }: Props) {
       <Handle id="b" type="source" position={Position.Bottom} style={handleStyle} />
       <Handle id="l" type="source" position={Position.Left} style={handleStyle} />
 
+      <div
+        style={{
+          background: "var(--paper-soft)",
+          // Concentric radii: outer 10 − left offset 6 = 4 for left corners;
+          // outer 10 − top/right/bottom offset 2 = 8 for the others.
+          borderRadius: "4px 8px 8px 4px",
+          padding: "10px 12px",
+        }}
+      >
       <div
         style={{
           display: "flex",
@@ -273,6 +284,7 @@ function NoteCardImpl({ data, selected }: Props) {
           )}
         </>
       )}
+      </div>
     </div>
   );
 }
