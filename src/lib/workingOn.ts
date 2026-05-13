@@ -24,7 +24,7 @@ export const NOTE_COLORS = [
 
 export const DEFAULT_NOTE_COLOR = NOTE_COLORS[0];
 
-export interface WorkingOnEdge {
+export interface BoardEdge {
   id: string;
   source: string;
   target: string;
@@ -33,35 +33,43 @@ export interface WorkingOnEdge {
   label?: string;
 }
 
-export interface WorkingOnData {
+/**
+ * One canvas board's persisted state: positions for any node id (issue or
+ * note), the note nodes themselves, and user-drawn edges (purely visual —
+ * not Linear's parent-child links).
+ */
+export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
   noteNodes: NoteNode[];
-  edges: WorkingOnEdge[];
+  edges: BoardEdge[];
 }
 
-export const EMPTY_WORKING_ON: WorkingOnData = {
+export const EMPTY_BOARD: BoardData = {
   issueMembers: {},
   noteNodes: [],
   edges: [],
 };
 
-export async function loadWorkingOn(): Promise<WorkingOnData> {
-  const res = await fetch("/api/working-on", { cache: "no-cache" });
-  if (!res.ok) throw new Error(`load working-on failed: ${res.status}`);
-  return (await res.json()) as WorkingOnData;
+export async function loadBoardData(endpoint: string): Promise<BoardData> {
+  const res = await fetch(endpoint, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`load ${endpoint} failed: ${res.status}`);
+  return (await res.json()) as BoardData;
 }
 
-export async function saveWorkingOn(data: WorkingOnData): Promise<WorkingOnData> {
-  const res = await fetch("/api/working-on", {
+export async function saveBoardData(endpoint: string, data: BoardData): Promise<BoardData> {
+  const res = await fetch(endpoint, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error(`save working-on failed: ${res.status}`);
-  const json = (await res.json()) as { ok: boolean; data?: WorkingOnData; error?: string };
-  if (!json.ok || !json.data) throw new Error(json.error ?? "save working-on: bad response");
+  if (!res.ok) throw new Error(`save ${endpoint} failed: ${res.status}`);
+  const json = (await res.json()) as { ok: boolean; data?: BoardData; error?: string };
+  if (!json.ok || !json.data) throw new Error(json.error ?? `save ${endpoint}: bad response`);
   return json.data;
 }
+
+export const WORKING_ON_ENDPOINT = "/api/working-on";
+export const ALL_ISSUES_BOARD_ENDPOINT = "/api/all-issues-board";
 
 // Tiny random id; not crypto, just unique enough within one user's session.
 export function shortId(prefix: string): string {

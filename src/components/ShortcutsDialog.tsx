@@ -7,13 +7,13 @@ interface ShortcutRow {
 }
 
 const SHORTCUTS: ShortcutRow[] = [
-  { keys: ["X"], scope: "Working On", desc: "Linking mode: click source → click target (or empty pane → spawns linked note)" },
-  { keys: ["C"], scope: "Working On", desc: "Undo last action (up to 50 steps)" },
+  { keys: ["X"], scope: "Canvas", desc: "Linking mode: click source → click target (or empty pane → spawns linked note)" },
+  { keys: ["C"], scope: "Canvas", desc: "Undo last action (up to 50 steps)" },
   { keys: ["Esc"], scope: "Global", desc: "Cancel link mode / leave edit / close menus" },
   { keys: ["⌘ Enter", "Ctrl Enter"], scope: "Note edit", desc: "Commit note edit; plain Enter inserts newline" },
-  { keys: ["Delete", "Backspace"], scope: "Working On", desc: "Delete selected node(s) or edge(s)" },
-  { keys: ["double-click empty"], scope: "Working On", desc: "Create a new note at the cursor; textarea auto-focuses" },
-  { keys: ["double-click edge"], scope: "Working On", desc: "Edit edge label at midpoint" },
+  { keys: ["Delete", "Backspace"], scope: "Canvas", desc: "Delete selected node(s) or edge(s)" },
+  { keys: ["double-click empty"], scope: "Canvas", desc: "Create a new note at the cursor; textarea auto-focuses" },
+  { keys: ["double-click edge"], scope: "Canvas", desc: "Edit edge label at midpoint" },
   { keys: ["drag empty pane"], scope: "All views", desc: "Box select — touch is enough, no need to fully cover" },
   { keys: ["two-finger scroll"], scope: "All views", desc: "Pan the canvas" },
   { keys: ["pinch"], scope: "All views", desc: "Zoom in / out" },

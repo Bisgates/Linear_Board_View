@@ -14,12 +14,12 @@ interface Props {
 }
 
 const LABEL: Record<ContextMenuTarget["kind"], string> = {
-  issue: "Remove from Working On",
+  issue: "Remove from board",
   note: "Delete note",
   edge: "Delete connection",
 };
 
-export function WorkingOnContextMenu({ x, y, target, onAction, onDismiss }: Props) {
+export function BoardContextMenu({ x, y, target, onAction, onDismiss }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {

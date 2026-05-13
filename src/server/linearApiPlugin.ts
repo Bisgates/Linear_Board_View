@@ -10,7 +10,7 @@ import { LinearClient } from "@linear/sdk";
 import { fetchAllIssues } from "../linear/fetchIssues.js";
 import { updateIssue, type IssuePatch } from "../linear/updateIssue.js";
 import { fetchAllWorkflowStates } from "../linear/fetchWorkflowStates.js";
-import { readWorkingOn, writeWorkingOn } from "./workingOnStore.js";
+import { readBoard, writeBoard, STORE_PATHS } from "./boardStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,23 +42,30 @@ export function linearApiPlugin(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
 
-        // GET /api/working-on  (no Linear client required — local file only)
-        if (url === "/api/working-on" && req.method === "GET") {
-          try {
-            const data = await readWorkingOn();
-            return sendJson(res, 200, data);
-          } catch (err) {
-            return sendJson(res, 500, { ok: false, error: String(err) });
+        // Board state endpoints — one local json per board. No Linear client
+        // required (purely local visual state: positions, notes, user edges).
+        const BOARD_ENDPOINTS: Record<string, string> = {
+          "/api/working-on": STORE_PATHS.workingOn,
+          "/api/all-issues-board": STORE_PATHS.allIssuesBoard,
+        };
+        const storePath = BOARD_ENDPOINTS[url];
+        if (storePath) {
+          if (req.method === "GET") {
+            try {
+              const data = await readBoard(storePath);
+              return sendJson(res, 200, data);
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
           }
-        }
-        // PUT /api/working-on
-        if (url === "/api/working-on" && req.method === "PUT") {
-          try {
-            const body = await readJson(req);
-            const saved = await writeWorkingOn(body);
-            return sendJson(res, 200, { ok: true, data: saved });
-          } catch (err) {
-            return sendJson(res, 500, { ok: false, error: String(err) });
+          if (req.method === "PUT") {
+            try {
+              const body = await readJson(req);
+              const saved = await writeBoard(storePath, body);
+              return sendJson(res, 200, { ok: true, data: saved });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
           }
         }
 

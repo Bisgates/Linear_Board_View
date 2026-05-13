@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Board from "./components/Board";
-import WorkingOnBoard from "./components/WorkingOnBoard";
+import CanvasBoard from "./components/CanvasBoard";
 import { TopBar, type ActiveView } from "./components/TopBar";
 import { FilterBar } from "./components/FilterBar";
 import { DetailPanel } from "./components/DetailPanel";
@@ -10,8 +9,9 @@ import { ToastStack, type ToastItem } from "./components/Toast";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
-import { useWorkingOnState } from "./lib/useWorkingOnState";
+import { useAllIssuesBoardState, useWorkingOnState } from "./lib/useBoardState";
 import { findNextSlot } from "./lib/workingOn";
+import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
 
@@ -37,6 +37,9 @@ export default function App() {
   }, []);
 
   const workingOn = useWorkingOnState((e) => pushToast("error", `Working-on save failed: ${String(e)}`));
+  const allIssuesBoard = useAllIssuesBoardState((e) =>
+    pushToast("error", `All-issues board save failed: ${String(e)}`),
+  );
 
   useEffect(() => {
     (async () => {
@@ -179,6 +182,24 @@ export default function App() {
 
   const workingOnIds = useMemo(() => new Set(Object.keys(workingOn.data.issueMembers)), [workingOn.data.issueMembers]);
 
+  // Working On displays only explicit members of the snapshot; keep insertion
+  // order of issueMembers so newly-added issues land next to where the picker
+  // placed them.
+  const workingOnDisplayed = useMemo(() => {
+    const out: IssueRecord[] = [];
+    for (const id of Object.keys(workingOn.data.issueMembers)) {
+      const iss = issuesById.get(id);
+      if (iss) out.push(iss);
+    }
+    return out;
+  }, [workingOn.data.issueMembers, issuesById]);
+
+  // Auto-layout computes per-team / per-project grid coordinates and is used
+  // as the fallback whenever an issue has no stored position yet. Computed
+  // from the full snapshot (not filtered) so positions stay stable as the
+  // user toggles filters.
+  const allIssuesInitialPositions = useMemo(() => computeInitialLayout(allIssues), [allIssues]);
+
   const addToWorkingOn = useCallback(
     (issueId: string) => {
       workingOn.setData((prev) => {
@@ -230,14 +251,25 @@ export default function App() {
             <div style={{ padding: 20, color: "var(--warm-red)" }}>{error}</div>
           )}
           {activeView === "all" ? (
-            <Board issues={filtered} onSelectIssue={setSelectedId} selectedId={selectedId} />
+            <CanvasBoard
+              displayedIssues={filtered}
+              data={allIssuesBoard.data}
+              loaded={allIssuesBoard.loaded}
+              setData={allIssuesBoard.setData}
+              undo={allIssuesBoard.undo}
+              initialPositions={allIssuesInitialPositions}
+              loadingLabel="loading all_issues_board…"
+              onSelectIssue={setSelectedId}
+              selectedIssueId={selectedId}
+            />
           ) : (
-            <WorkingOnBoard
+            <CanvasBoard
+              displayedIssues={workingOnDisplayed}
               data={workingOn.data}
               loaded={workingOn.loaded}
-              issuesById={issuesById}
               setData={workingOn.setData}
               undo={workingOn.undo}
+              loadingLabel="loading working_on…"
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
             />

@@ -8,8 +8,10 @@ import {
   ConnectionMode,
   MarkerType,
   ViewportPortal,
+  applyEdgeChanges,
   applyNodeChanges,
   type Edge,
+  type EdgeChange,
   type EdgeTypes,
   type Node,
   type NodeChange,
@@ -21,9 +23,9 @@ import type { IssueRecord } from "../linear/types";
 import { IssueCard } from "./IssueCard";
 import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
-import { WorkingOnContextMenu, type ContextMenuTarget } from "./WorkingOnContextMenu";
+import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { WorkingOnData, WorkingOnEdge } from "../lib/workingOn";
+import type { BoardData, BoardEdge } from "../lib/workingOn";
 import { shortId } from "../lib/workingOn";
 
 const NODE_TYPES: NodeTypes = {
@@ -34,23 +36,41 @@ const EDGE_TYPES: EdgeTypes = {
   labeled: LabeledEdge as unknown as EdgeTypes[string],
 };
 
-interface WorkingOnBoardProps {
-  data: WorkingOnData;
+interface CanvasBoardProps {
+  /**
+   * The set of Linear issues to render as nodes on this board. Each view
+   * decides its own selection: Working On shows only explicit members,
+   * All Issues shows the full filtered snapshot, etc.
+   */
+  displayedIssues: IssueRecord[];
+  data: BoardData;
   loaded: boolean;
-  issuesById: Map<string, IssueRecord>;
-  setData: (updater: WorkingOnData | ((prev: WorkingOnData) => WorkingOnData)) => void;
+  setData: (updater: BoardData | ((prev: BoardData) => BoardData)) => void;
   undo?: () => boolean;
   onSelectIssue?: (id: string | null) => void;
   selectedIssueId?: string | null;
+  /**
+   * Auto-layout fallback positions used when a displayed issue has no
+   * stored position yet. Typically `computeInitialLayout(displayedIssues)`
+   * for all-issues-style boards; omitted for working-on-style boards where
+   * every member already has an explicit position.
+   */
+  initialPositions?: Record<string, { x: number; y: number }>;
+  /** Hide the loading overlay text. Each view names its own store differently. */
+  loadingLabel?: string;
 }
 
-function buildNodes(data: WorkingOnData, issuesById: Map<string, IssueRecord>, editingNoteId: string | null): Node[] {
+function buildNodes(
+  displayedIssues: IssueRecord[],
+  data: BoardData,
+  initialPositions: Record<string, { x: number; y: number }> | undefined,
+  editingNoteId: string | null,
+): Node[] {
   const nodes: Node[] = [];
-  for (const [issueId, pos] of Object.entries(data.issueMembers)) {
-    const issue = issuesById.get(issueId);
-    if (!issue) continue;
+  for (const issue of displayedIssues) {
+    const pos = data.issueMembers[issue.id] ?? initialPositions?.[issue.id] ?? { x: 0, y: 0 };
     nodes.push({
-      id: issueId,
+      id: issue.id,
       type: "issue",
       position: { x: pos.x, y: pos.y },
       data: issue as unknown as Record<string, unknown>,
@@ -407,7 +427,7 @@ function computeSnap(
   return { x: snappedX, y: snappedY, guides, gapGuides };
 }
 
-function buildEdges(data: WorkingOnData, editingEdgeId: string | null): Edge[] {
+function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
   return data.edges.map((e) => ({
     id: e.id,
     source: e.source,
@@ -429,7 +449,17 @@ function buildEdges(data: WorkingOnData, editingEdgeId: string | null): Edge[] {
   }));
 }
 
-function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, selectedIssueId }: WorkingOnBoardProps) {
+function BoardInner({
+  displayedIssues,
+  data,
+  loaded,
+  setData,
+  undo,
+  onSelectIssue,
+  selectedIssueId,
+  initialPositions,
+  loadingLabel,
+}: CanvasBoardProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -443,12 +473,35 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
   const [snapGuides, setSnapGuides] = useState<Guide[]>([]);
   const [gapGuides, setGapGuides] = useState<GapGuide[]>([]);
 
-  const edges = useMemo(() => buildEdges(data, editingEdgeId), [data, editingEdgeId]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+
+  const issuesById = useMemo(() => {
+    const m = new Map<string, IssueRecord>();
+    for (const i of displayedIssues) m.set(i.id, i);
+    return m;
+  }, [displayedIssues]);
 
   // Rebuild nodes when data shape changes (counts / contents).
   useEffect(() => {
-    setNodes(buildNodes(data, issuesById, editingNoteId));
-  }, [data, issuesById, editingNoteId]);
+    setNodes(buildNodes(displayedIssues, data, initialPositions, editingNoteId));
+  }, [displayedIssues, data, initialPositions, editingNoteId]);
+
+  // Rebuild edges from data, preserving the currently-selected edge's
+  // selection flag so click-to-select survives the rebuild. Without this
+  // round-trip xyflow can't track selection (we don't pass onEdgesChange to
+  // pure derived edges) and the Delete key has nothing to act on.
+  useEffect(() => {
+    setEdges((current) => {
+      const selectedIds = new Set(current.filter((e) => e.selected).map((e) => e.id));
+      const built = buildEdges(data, editingEdgeId);
+      if (selectedIds.size === 0) return built;
+      return built.map((e) => (selectedIds.has(e.id) ? { ...e, selected: true } : e));
+    });
+  }, [data, editingEdgeId]);
+
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    setEdges((current) => applyEdgeChanges(changes, current));
+  }, []);
 
   // Sync selection halo from outside.
   useEffect(() => {
@@ -586,7 +639,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
     (params: Connection) => {
       if (!params.source || !params.target) return;
       const id = shortId("e");
-      const edge: WorkingOnEdge = {
+      const edge: BoardEdge = {
         id,
         source: params.source,
         target: params.target,
@@ -641,7 +694,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
             ...prev,
             edges: [
               ...prev.edges,
-              { id, source: linking.source, target: node.id } satisfies WorkingOnEdge,
+              { id, source: linking.source, target: node.id } satisfies BoardEdge,
             ],
           }));
         }
@@ -672,9 +725,10 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
         setLinking((prev) => (prev.mode === "off" ? { mode: "source" } : { mode: "off" }));
         return;
       }
-      if ((evt.key === "c" || evt.key === "C") && undo) {
+      if ((evt.key === "c" || evt.key === "C" || evt.code === "KeyC") && undo) {
         evt.preventDefault();
-        undo();
+        const ok = undo();
+        console.log(`[canvas-board] undo via C key → ${ok ? "ok" : "nothing to undo"}`);
         return;
       }
     };
@@ -733,7 +787,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
           noteNodes: [...prev.noteNodes, { id: noteId, body: "", x: pt.x, y: pt.y }],
           edges: [
             ...prev.edges,
-            { id: edgeId, source: srcId, target: noteId } satisfies WorkingOnEdge,
+            { id: edgeId, source: srcId, target: noteId } satisfies BoardEdge,
           ],
         }));
         setEditingNoteId(noteId);
@@ -844,7 +898,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
     >
       {!loaded && (
         <div style={{ position: "absolute", top: 12, left: 12, color: "var(--muted)", fontSize: 11, zIndex: 5 }}>
-          loading working_on…
+          {loadingLabel ?? "loading board…"}
         </div>
       )}
       {linking.mode !== "off" && (
@@ -892,6 +946,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
         nodes={decoratedNodes}
         edges={decoratedEdges}
         onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onNodesDelete={onNodesDelete}
         onEdgesDelete={onEdgesDelete}
         onConnect={onConnect}
@@ -906,6 +961,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
         nodesConnectable
         nodesFocusable={false}
         edgesFocusable
+        deleteKeyCode={["Backspace", "Delete"]}
         {...SHARED_FLOW_PROPS}
       >
         <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
@@ -1032,7 +1088,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
         />
       </ReactFlow>
       {menu && (
-        <WorkingOnContextMenu
+        <BoardContextMenu
           x={menu.x}
           y={menu.y}
           target={menu.target}
@@ -1044,7 +1100,7 @@ function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, se
   );
 }
 
-export default function WorkingOnBoard(props: WorkingOnBoardProps) {
+export default function CanvasBoard(props: CanvasBoardProps) {
   return (
     <ReactFlowProvider>
       <BoardInner {...props} />

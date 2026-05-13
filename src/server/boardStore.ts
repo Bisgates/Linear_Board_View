@@ -4,19 +4,25 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const STORE_PATH = resolve(__dirname, "..", "..", "public", "data", "working_on.json");
 
-export interface WorkingOnData {
+const DATA_DIR = resolve(__dirname, "..", "..", "public", "data");
+
+export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
   noteNodes: { id: string; body: string; x: number; y: number; color?: string }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
 }
 
-const EMPTY: WorkingOnData = { issueMembers: {}, noteNodes: [], edges: [] };
+const EMPTY: BoardData = { issueMembers: {}, noteNodes: [], edges: [] };
 
-export async function readWorkingOn(): Promise<WorkingOnData> {
+export const STORE_PATHS = {
+  workingOn: resolve(DATA_DIR, "working_on.json"),
+  allIssuesBoard: resolve(DATA_DIR, "all_issues_board.json"),
+} as const;
+
+export async function readBoard(path: string): Promise<BoardData> {
   try {
-    const raw = await readFile(STORE_PATH, "utf8");
+    const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     return validate(parsed);
   } catch (err) {
@@ -26,18 +32,18 @@ export async function readWorkingOn(): Promise<WorkingOnData> {
   }
 }
 
-export async function writeWorkingOn(data: unknown): Promise<WorkingOnData> {
+export async function writeBoard(path: string, data: unknown): Promise<BoardData> {
   const clean = validate(data);
-  await mkdir(dirname(STORE_PATH), { recursive: true });
-  await writeFile(STORE_PATH, JSON.stringify(clean, null, 2), "utf8");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(clean, null, 2), "utf8");
   return clean;
 }
 
-function validate(raw: unknown): WorkingOnData {
+function validate(raw: unknown): BoardData {
   if (!raw || typeof raw !== "object") return { ...EMPTY };
   const obj = raw as Record<string, unknown>;
 
-  const members: WorkingOnData["issueMembers"] = {};
+  const members: BoardData["issueMembers"] = {};
   if (obj.issueMembers && typeof obj.issueMembers === "object") {
     for (const [k, v] of Object.entries(obj.issueMembers as Record<string, unknown>)) {
       if (v && typeof v === "object") {
@@ -49,7 +55,7 @@ function validate(raw: unknown): WorkingOnData {
     }
   }
 
-  const notes: WorkingOnData["noteNodes"] = [];
+  const notes: BoardData["noteNodes"] = [];
   if (Array.isArray(obj.noteNodes)) {
     for (const n of obj.noteNodes) {
       if (!n || typeof n !== "object") continue;
@@ -59,7 +65,6 @@ function validate(raw: unknown): WorkingOnData {
         typeof r.x === "number" &&
         typeof r.y === "number"
       ) {
-        // Migrate legacy { title, body } into a single body string (title becomes first line).
         const rawBody = typeof r.body === "string" ? r.body : "";
         const legacyTitle = typeof r.title === "string" ? r.title : "";
         const merged =
@@ -68,7 +73,7 @@ function validate(raw: unknown): WorkingOnData {
             : legacyTitle && rawBody && !rawBody.startsWith(legacyTitle)
               ? `${legacyTitle}\n${rawBody}`
               : rawBody;
-        const note: WorkingOnData["noteNodes"][number] = {
+        const note: BoardData["noteNodes"][number] = {
           id: r.id,
           body: merged,
           x: r.x,
@@ -82,7 +87,7 @@ function validate(raw: unknown): WorkingOnData {
     }
   }
 
-  const edges: WorkingOnData["edges"] = [];
+  const edges: BoardData["edges"] = [];
   if (Array.isArray(obj.edges)) {
     for (const e of obj.edges) {
       if (!e || typeof e !== "object") continue;
@@ -92,7 +97,7 @@ function validate(raw: unknown): WorkingOnData {
         typeof r.source === "string" &&
         typeof r.target === "string"
       ) {
-        const out: WorkingOnData["edges"][number] = { id: r.id, source: r.source, target: r.target };
+        const out: BoardData["edges"][number] = { id: r.id, source: r.source, target: r.target };
         if (typeof r.sourceHandle === "string") out.sourceHandle = r.sourceHandle;
         if (typeof r.targetHandle === "string") out.targetHandle = r.targetHandle;
         if (typeof r.label === "string") out.label = r.label;
