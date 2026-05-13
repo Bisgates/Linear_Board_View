@@ -70,6 +70,19 @@ export function shortId(prefix: string): string {
   return `${prefix}_${t}${r}`;
 }
 
+/** Open a local file path or URL via the dev server's POST /api/open. */
+export async function openLocalPath(p: string): Promise<void> {
+  try {
+    await fetch("/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: p }),
+    });
+  } catch (err) {
+    console.error("[open] failed", err);
+  }
+}
+
 /**
  * Find next empty grid slot for placing a freshly added node, scanning
  * row-by-row across 6 columns. Returns the first slot whose center is

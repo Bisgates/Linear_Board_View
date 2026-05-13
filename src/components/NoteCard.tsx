@@ -1,6 +1,69 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { DEFAULT_NOTE_COLOR, NOTE_COLORS } from "../lib/workingOn";
+import { DEFAULT_NOTE_COLOR, NOTE_COLORS, openLocalPath } from "../lib/workingOn";
+
+// Match http(s) URLs and absolute Mac / Linux file paths (common roots only).
+// Stops at whitespace and common trailing punctuation so a URL in parens or a
+// path followed by a comma still parses cleanly.
+const LINK_REGEX =
+  /(https?:\/\/[^\s)\]}>]+|\/(?:Users|Volumes|tmp|var|opt|Applications|Library|home|private|etc)\/[^\s)\]}>]+)/g;
+
+function renderTokens(text: string, accent: string): ReactNode[] {
+  const tokens: ReactNode[] = [];
+  let lastIdx = 0;
+  let key = 0;
+  LINK_REGEX.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LINK_REGEX.exec(text)) !== null) {
+    if (m.index > lastIdx) tokens.push(text.slice(lastIdx, m.index));
+    const link = m[0];
+    const linkStyle: React.CSSProperties = {
+      color: accent,
+      textDecoration: "underline",
+      cursor: "pointer",
+      wordBreak: "break-all",
+    };
+    if (link.startsWith("http")) {
+      tokens.push(
+        <a
+          key={key++}
+          className="nodrag nopan"
+          href={link}
+          target="_blank"
+          rel="noopener noreferrer"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          style={linkStyle}
+        >
+          {link}
+        </a>,
+      );
+    } else {
+      tokens.push(
+        <a
+          key={key++}
+          className="nodrag nopan"
+          href="#"
+          title={`open ${link}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void openLocalPath(link);
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+          style={linkStyle}
+        >
+          {link}
+        </a>,
+      );
+    }
+    lastIdx = m.index + link.length;
+  }
+  if (lastIdx < text.length) tokens.push(text.slice(lastIdx));
+  return tokens;
+}
 
 interface NoteData {
   id: string;
@@ -193,7 +256,7 @@ function NoteCardImpl({ data, selected }: Props) {
               wordBreak: "break-word",
             }}
           >
-            {titleLine || "untitled (double-click to edit)"}
+            {titleLine ? renderTokens(titleLine, color) : "untitled (double-click to edit)"}
           </div>
           {restText && (
             <div
@@ -205,7 +268,7 @@ function NoteCardImpl({ data, selected }: Props) {
                 wordBreak: "break-word",
               }}
             >
-              {restText}
+              {renderTokens(restText, color)}
             </div>
           )}
         </>

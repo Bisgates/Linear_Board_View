@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import { platform } from "node:os";
 import { LinearClient } from "@linear/sdk";
 import { fetchAllIssues } from "../linear/fetchIssues.js";
 import { updateIssue, type IssuePatch } from "../linear/updateIssue.js";
@@ -55,6 +57,25 @@ export function linearApiPlugin(): Plugin {
             const body = await readJson(req);
             const saved = await writeWorkingOn(body);
             return sendJson(res, 200, { ok: true, data: saved });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        // POST /api/open — launch a local file / URL via the OS opener.
+        // Dev-only (apply: "serve") + localhost-bound by Vite, so the auth surface
+        // is the same as having shell access to this user account.
+        if (url === "/api/open" && req.method === "POST") {
+          try {
+            const body = (await readJson(req)) as { path?: string };
+            if (typeof body.path !== "string" || !body.path) {
+              return sendJson(res, 400, { ok: false, error: "missing path" });
+            }
+            const opener =
+              platform() === "darwin" ? "open" : platform() === "win32" ? "start" : "xdg-open";
+            const child = spawn(opener, [body.path], { stdio: "ignore", detached: true });
+            child.unref();
+            return sendJson(res, 200, { ok: true });
           } catch (err) {
             return sendJson(res, 500, { ok: false, error: String(err) });
           }
