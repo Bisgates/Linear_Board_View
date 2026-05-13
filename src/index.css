@@ -113,18 +113,19 @@ body {
 }
 
 /* Edge hover / selected affordance — thicken stroke + faint glow so the user
- * can tell when an edge is actually selected before pressing Delete. */
+ * can tell when an edge is actually selected before pressing Delete. Glow
+ * colour mirrors the muted taupe edge stroke. */
 .react-flow__edge-path {
   transition:
     stroke-width 0.12s ease,
     filter 0.12s ease;
 }
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 3 !important;
-  filter: drop-shadow(0 0 2px rgba(178, 58, 72, 0.45));
+  stroke-width: 2.6 !important;
+  filter: drop-shadow(0 0 2px rgba(122, 112, 96, 0.55));
   cursor: pointer;
 }
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke-width: 3.5 !important;
-  filter: drop-shadow(0 0 3px rgba(178, 58, 72, 0.65));
+  stroke-width: 3 !important;
+  filter: drop-shadow(0 0 3px rgba(122, 112, 96, 0.75));
 }

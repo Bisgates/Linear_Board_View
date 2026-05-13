@@ -1,18 +1,13 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-
-const HANDLE_STYLE: React.CSSProperties = {
-  width: 10,
-  height: 10,
-  background: "var(--paper)",
-  border: "1.5px solid var(--amber)",
-};
+import { DEFAULT_NOTE_COLOR, NOTE_COLORS } from "../lib/workingOn";
 
 interface NoteData {
   id: string;
   body: string;
+  color?: string;
   autoEdit?: boolean;
-  onCommit?: (patch: { body: string }) => void;
+  onCommit?: (patch: { body?: string; color?: string }) => void;
   onEditEnd?: () => void;
 }
 
@@ -23,14 +18,18 @@ function NoteCardImpl({ data, selected }: Props) {
   const [text, setText] = useState(data.body);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Sync local buffer with outer data when not editing.
+  const color = data.color ?? DEFAULT_NOTE_COLOR;
+  const handleStyle: React.CSSProperties = {
+    width: 10,
+    height: 10,
+    background: "var(--paper)",
+    border: `1.5px solid ${color}`,
+  };
+
   useEffect(() => {
     if (!editing) setText(data.body);
   }, [data.body, editing]);
 
-  // On entering edit, focus and put caret at end.
-  // Use rAF to survive any focus stealing by ReactFlow's pane after the click
-  // sequence that created this note.
   useEffect(() => {
     if (!editing) return;
     const raf = requestAnimationFrame(() => {
@@ -68,22 +67,22 @@ function NoteCardImpl({ data, selected }: Props) {
       style={{
         width: 280,
         background: "var(--paper-soft)",
-        border: `2px solid var(--amber)`,
-        borderLeft: `6px solid var(--amber)`,
+        border: `2px solid ${color}`,
+        borderLeft: `6px solid ${color}`,
         borderRadius: 8,
         padding: "10px 12px",
         boxShadow: selected
-          ? `0 0 0 3px rgba(168,104,16,0.25), 0 4px 14px rgba(26,24,20,0.12)`
+          ? `0 0 0 3px ${color}40, 0 4px 14px rgba(26,24,20,0.12)`
           : "0 1px 0 rgba(26,24,20,0.04)",
         color: "var(--ink)",
         cursor: editing ? "text" : "grab",
         transition: "box-shadow 0.12s",
       }}
     >
-      <Handle id="t" type="source" position={Position.Top} style={HANDLE_STYLE} />
-      <Handle id="r" type="source" position={Position.Right} style={HANDLE_STYLE} />
-      <Handle id="b" type="source" position={Position.Bottom} style={HANDLE_STYLE} />
-      <Handle id="l" type="source" position={Position.Left} style={HANDLE_STYLE} />
+      <Handle id="t" type="source" position={Position.Top} style={handleStyle} />
+      <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
+      <Handle id="b" type="source" position={Position.Bottom} style={handleStyle} />
+      <Handle id="l" type="source" position={Position.Left} style={handleStyle} />
 
       <div
         style={{
@@ -91,8 +90,8 @@ function NoteCardImpl({ data, selected }: Props) {
           justifyContent: "space-between",
           alignItems: "center",
           fontSize: 10,
-          color: "var(--amber)",
-          marginBottom: 4,
+          color,
+          marginBottom: 6,
           letterSpacing: "0.1em",
           textTransform: "uppercase",
           fontWeight: 600,
@@ -101,6 +100,50 @@ function NoteCardImpl({ data, selected }: Props) {
         <span>Note</span>
         <span style={{ fontFamily: "var(--mono)", color: "var(--muted)" }}>local</span>
       </div>
+
+      {editing && (
+        <div
+          className="nodrag nopan"
+          style={{
+            display: "flex",
+            gap: 6,
+            marginBottom: 8,
+            alignItems: "center",
+          }}
+        >
+          {NOTE_COLORS.map((c) => {
+            const active = c === color;
+            return (
+              <button
+                key={c}
+                type="button"
+                aria-label={`color ${c}`}
+                className="nodrag nopan"
+                onMouseDown={(e) => {
+                  // Keep textarea focused; also stop xyflow's drag start.
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (c !== color) data.onCommit?.({ color: c });
+                }}
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: "50%",
+                  background: c,
+                  border: active ? `2px solid var(--ink)` : "1px solid rgba(26,24,20,0.15)",
+                  cursor: "pointer",
+                  padding: 0,
+                  boxShadow: active ? "0 0 0 2px var(--paper-soft)" : "none",
+                  transition: "transform 0.1s, box-shadow 0.1s",
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {editing ? (
         <textarea
@@ -115,6 +158,9 @@ function NoteCardImpl({ data, selected }: Props) {
             if (e.key === "Escape") {
               e.preventDefault();
               cancel();
+            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              commit();
             }
           }}
           onBlur={commit}

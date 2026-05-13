@@ -2,8 +2,11 @@ import { memo, useEffect, useRef, useState } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
+  Position,
   getSmoothStepPath,
+  useInternalNode,
   type EdgeProps,
+  type InternalNode,
 } from "@xyflow/react";
 
 interface LabeledEdgeData {
@@ -13,15 +16,98 @@ interface LabeledEdgeData {
   onEditEnd?: () => void;
 }
 
+function getEdgeParams(source: InternalNode, target: InternalNode) {
+  const sw = source.measured?.width ?? 280;
+  const sh = source.measured?.height ?? 120;
+  const tw = target.measured?.width ?? 280;
+  const th = target.measured?.height ?? 120;
+  const spx = source.internals.positionAbsolute.x;
+  const spy = source.internals.positionAbsolute.y;
+  const tpx = target.internals.positionAbsolute.x;
+  const tpy = target.internals.positionAbsolute.y;
+
+  const scx = spx + sw / 2;
+  const scy = spy + sh / 2;
+  const tcx = tpx + tw / 2;
+  const tcy = tpy + th / 2;
+
+  const dx = tcx - scx;
+  const dy = tcy - scy;
+
+  // Dominant-axis pick — yields a single-turn smoothstep when nodes are roughly
+  // aligned, Z-shape otherwise. Always re-evaluates on node move because
+  // useInternalNode below subscribes to position changes.
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    if (dx >= 0) {
+      return {
+        sx: spx + sw,
+        sy: scy,
+        tx: tpx,
+        ty: tcy,
+        sourcePos: Position.Right,
+        targetPos: Position.Left,
+      };
+    }
+    return {
+      sx: spx,
+      sy: scy,
+      tx: tpx + tw,
+      ty: tcy,
+      sourcePos: Position.Left,
+      targetPos: Position.Right,
+    };
+  }
+  if (dy >= 0) {
+    return {
+      sx: scx,
+      sy: spy + sh,
+      tx: tcx,
+      ty: tpy,
+      sourcePos: Position.Bottom,
+      targetPos: Position.Top,
+    };
+  }
+  return {
+    sx: scx,
+    sy: spy,
+    tx: tcx,
+    ty: tpy + th,
+    sourcePos: Position.Top,
+    targetPos: Position.Bottom,
+  };
+}
+
 function LabeledEdgeImpl(props: EdgeProps) {
   const data = (props.data ?? {}) as LabeledEdgeData;
+  const sourceNode = useInternalNode(props.source);
+  const targetNode = useInternalNode(props.target);
+
+  // Floating-edge: derive endpoints from current node bboxes. Re-renders on
+  // drag because useInternalNode subscribes to position changes. Fall back to
+  // xyflow's handle-derived props on the first frame when measure isn't ready.
+  let sx = props.sourceX;
+  let sy = props.sourceY;
+  let tx = props.targetX;
+  let ty = props.targetY;
+  let sourcePos = props.sourcePosition;
+  let targetPos = props.targetPosition;
+  if (sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
+    const p = getEdgeParams(sourceNode, targetNode);
+    sx = p.sx;
+    sy = p.sy;
+    tx = p.tx;
+    ty = p.ty;
+    sourcePos = p.sourcePos;
+    targetPos = p.targetPos;
+  }
+
   const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX: props.sourceX,
-    sourceY: props.sourceY,
-    targetX: props.targetX,
-    targetY: props.targetY,
-    sourcePosition: props.sourcePosition,
-    targetPosition: props.targetPosition,
+    sourceX: sx,
+    sourceY: sy,
+    targetX: tx,
+    targetY: ty,
+    sourcePosition: sourcePos,
+    targetPosition: targetPos,
   });
 
   const externalEditing = Boolean(data.editing);
@@ -29,18 +115,15 @@ function LabeledEdgeImpl(props: EdgeProps) {
   const [text, setText] = useState<string>(data.label ?? "");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Sync external editing flag (entering / leaving from outside, e.g. on dblclick).
   useEffect(() => {
     setEditing(externalEditing);
     if (externalEditing) setText(data.label ?? "");
   }, [externalEditing, data.label]);
 
-  // Refresh display text when not editing.
   useEffect(() => {
     if (!editing) setText(data.label ?? "");
   }, [data.label, editing]);
 
-  // Focus the input on entering edit mode (rAF to survive any focus stealing by ReactFlow's pane).
   useEffect(() => {
     if (!editing) return;
     const raf = requestAnimationFrame(() => {
@@ -106,7 +189,6 @@ function LabeledEdgeImpl(props: EdgeProps) {
                     e.preventDefault();
                     commit();
                   }
-                  // Stop xyflow's global keydown (Delete/Backspace) from chewing on the edge while we type.
                   e.stopPropagation();
                 }}
                 onBlur={commit}

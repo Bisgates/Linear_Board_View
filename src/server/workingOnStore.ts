@@ -8,7 +8,7 @@ const STORE_PATH = resolve(__dirname, "..", "..", "public", "data", "working_on.
 
 export interface WorkingOnData {
   issueMembers: Record<string, { x: number; y: number }>;
-  noteNodes: { id: string; body: string; x: number; y: number }[];
+  noteNodes: { id: string; body: string; x: number; y: number; color?: string }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
 }
 
@@ -68,7 +68,16 @@ function validate(raw: unknown): WorkingOnData {
             : legacyTitle && rawBody && !rawBody.startsWith(legacyTitle)
               ? `${legacyTitle}\n${rawBody}`
               : rawBody;
-        notes.push({ id: r.id, body: merged, x: r.x, y: r.y });
+        const note: WorkingOnData["noteNodes"][number] = {
+          id: r.id,
+          body: merged,
+          x: r.x,
+          y: r.y,
+        };
+        if (typeof r.color === "string" && /^#[0-9a-fA-F]{3,8}$/.test(r.color)) {
+          note.color = r.color;
+        }
+        notes.push(note);
       }
     }
   }

@@ -5,6 +5,7 @@ import { TopBar, type ActiveView } from "./components/TopBar";
 import { FilterBar } from "./components/FilterBar";
 import { DetailPanel } from "./components/DetailPanel";
 import { IssuePickerPopover } from "./components/IssuePickerPopover";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ToastStack, type ToastItem } from "./components/Toast";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
@@ -25,6 +26,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [activeView, setActiveView] = useState<ActiveView>("all");
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -207,6 +209,7 @@ export default function App() {
         lastSyncAt={lastSyncAt}
         syncing={syncing}
         onRefresh={refresh}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
         issueCount={displayCount}
         totalCount={displayTotal}
         activeView={activeView}
@@ -217,6 +220,7 @@ export default function App() {
           ) : null
         }
       />
+      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {activeView === "all" && (
         <FilterBar filter={filter} options={options} onChange={setFilter} />
       )}
@@ -233,6 +237,7 @@ export default function App() {
               loaded={workingOn.loaded}
               issuesById={issuesById}
               setData={workingOn.setData}
+              undo={workingOn.undo}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
             />

@@ -3,7 +3,26 @@ export interface NoteNode {
   body: string;
   x: number;
   y: number;
+  color?: string;
 }
+
+/**
+ * Note color palette — 8 Morandi tones spaced across the hue wheel so adjacent
+ * swatches are clearly distinguishable on warm-cream paper. First entry is the
+ * default (matches the original amber accent).
+ */
+export const NOTE_COLORS = [
+  "#7a8b66", // sage (default)
+  "#a86810", // amber
+  "#a76e6e", // rose
+  "#6b85a3", // slate blue
+  "#8e6b8e", // plum
+  "#b07b50", // terracotta
+  "#6c7a7a", // teal-gray
+  "#8b8170", // muted
+] as const;
+
+export const DEFAULT_NOTE_COLOR = NOTE_COLORS[0];
 
 export interface WorkingOnEdge {
   id: string;

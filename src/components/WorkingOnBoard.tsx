@@ -7,6 +7,7 @@ import {
   MiniMap,
   ConnectionMode,
   MarkerType,
+  ViewportPortal,
   applyNodeChanges,
   type Edge,
   type EdgeTypes,
@@ -38,6 +39,7 @@ interface WorkingOnBoardProps {
   loaded: boolean;
   issuesById: Map<string, IssueRecord>;
   setData: (updater: WorkingOnData | ((prev: WorkingOnData) => WorkingOnData)) => void;
+  undo?: () => boolean;
   onSelectIssue?: (id: string | null) => void;
   selectedIssueId?: string | null;
 }
@@ -60,11 +62,349 @@ function buildNodes(data: WorkingOnData, issuesById: Map<string, IssueRecord>, e
       id: note.id,
       type: "note",
       position: { x: note.x, y: note.y },
-      data: { id: note.id, body: note.body, autoEdit: note.id === editingNoteId } as unknown as Record<string, unknown>,
+      data: {
+        id: note.id,
+        body: note.body,
+        color: note.color,
+        autoEdit: note.id === editingNoteId,
+      } as unknown as Record<string, unknown>,
       draggable: true,
     });
   }
   return nodes;
+}
+
+const EDGE_COLOR = "#7a7060"; // warm taupe — sits quietly on paper, not shouty
+
+// Snap-to-align: when a node is dragged within SNAP_THRESHOLD of another node's
+// left / centre / right (X) or top / middle / bottom (Y) line, the dragged
+// node snaps to that line and a guide is rendered until release.
+const SNAP_THRESHOLD = 10;
+const DEFAULT_CARD_W = 280;
+const DEFAULT_CARD_H = 110;
+
+interface Guide {
+  axis: "v" | "h";
+  pos: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * Visual guide for an equal-gap snap. Drawn as two short horizontal (or
+ * vertical) bars highlighting the matched distances between three cards.
+ */
+interface GapGuide {
+  axis: "x" | "y";
+  pos: number;            // cross-axis coord where the bar sits
+  span1: [number, number]; // first matched gap (start, end)
+  span2: [number, number]; // second matched gap (start, end)
+}
+
+const GAP_STRIPE_TOL = 40; // cross-axis tolerance for "same row / column"
+
+function nodeSize(n: Node): { w: number; h: number } {
+  const w = (n as { measured?: { width?: number } }).measured?.width ?? n.width ?? DEFAULT_CARD_W;
+  const h = (n as { measured?: { height?: number } }).measured?.height ?? n.height ?? DEFAULT_CARD_H;
+  return { w, h };
+}
+
+/**
+ * Equal-gap snap on the X axis: if two stationary cards A,B sit in roughly the
+ * same horizontal stripe as the drag node D, and D can be positioned so that
+ * the gap B → D equals the gap A → B (or symmetrically D → A vs A → B), snap
+ * and emit a gap guide.
+ */
+function computeGapSnapX(
+  dragId: string,
+  dragPos: { x: number; y: number },
+  dragW: number,
+  dragH: number,
+  current: Node[],
+): { x: number; gap: GapGuide } | null {
+  const dragCY = dragPos.y + dragH / 2;
+  const stationary = current.filter((n) => n.id !== dragId);
+  let best: { x: number; delta: number; gap: GapGuide } | null = null;
+
+  for (const a of stationary) {
+    const { w: aw, h: ah } = nodeSize(a);
+    const aCY = a.position.y + ah / 2;
+    if (Math.abs(aCY - dragCY) > GAP_STRIPE_TOL) continue;
+    const aLeft = a.position.x;
+    const aRight = aLeft + aw;
+
+    for (const b of stationary) {
+      if (a.id === b.id) continue;
+      const { w: bw, h: bh } = nodeSize(b);
+      const bCY = b.position.y + bh / 2;
+      if (Math.abs(bCY - dragCY) > GAP_STRIPE_TOL) continue;
+      const bLeft = b.position.x;
+      const bRight = bLeft + bw;
+      if (aRight >= bLeft) continue; // require A strictly left of B with no overlap
+
+      const gap = bLeft - aRight;
+      if (gap <= 0) continue;
+
+      // 1) A | B | D — D placed to the right of B with the same gap.
+      const tRight = bRight + gap;
+      const dRight = Math.abs(dragPos.x - tRight);
+      if (dRight <= SNAP_THRESHOLD && (!best || dRight < best.delta)) {
+        const ymid = Math.round(dragCY);
+        best = {
+          x: tRight,
+          delta: dRight,
+          gap: {
+            axis: "x",
+            pos: ymid,
+            span1: [aRight, bLeft],
+            span2: [bRight, bRight + gap],
+          },
+        };
+      }
+      // 2) D | A | B — D placed to the left of A with the same gap.
+      const tLeft = aLeft - gap - dragW;
+      const dLeft = Math.abs(dragPos.x - tLeft);
+      if (dLeft <= SNAP_THRESHOLD && (!best || dLeft < best.delta)) {
+        const ymid = Math.round(dragCY);
+        best = {
+          x: tLeft,
+          delta: dLeft,
+          gap: {
+            axis: "x",
+            pos: ymid,
+            span1: [tLeft + dragW, aLeft],
+            span2: [aRight, bLeft],
+          },
+        };
+      }
+      // 3) A | D | B — D placed between A and B with equal sub-gaps.
+      const subGap = (bLeft - aRight - dragW) / 2;
+      if (subGap > 0) {
+        const tMid = aRight + subGap;
+        const dMid = Math.abs(dragPos.x - tMid);
+        if (dMid <= SNAP_THRESHOLD && (!best || dMid < best.delta)) {
+          const ymid = Math.round(dragCY);
+          best = {
+            x: tMid,
+            delta: dMid,
+            gap: {
+              axis: "x",
+              pos: ymid,
+              span1: [aRight, tMid],
+              span2: [tMid + dragW, bLeft],
+            },
+          };
+        }
+      }
+    }
+  }
+  return best ? { x: best.x, gap: best.gap } : null;
+}
+
+function computeGapSnapY(
+  dragId: string,
+  dragPos: { x: number; y: number },
+  dragW: number,
+  dragH: number,
+  current: Node[],
+): { y: number; gap: GapGuide } | null {
+  const dragCX = dragPos.x + dragW / 2;
+  const stationary = current.filter((n) => n.id !== dragId);
+  let best: { y: number; delta: number; gap: GapGuide } | null = null;
+
+  for (const a of stationary) {
+    const { w: aw, h: ah } = nodeSize(a);
+    const aCX = a.position.x + aw / 2;
+    if (Math.abs(aCX - dragCX) > GAP_STRIPE_TOL) continue;
+    const aTop = a.position.y;
+    const aBottom = aTop + ah;
+
+    for (const b of stationary) {
+      if (a.id === b.id) continue;
+      const { w: bw, h: bh } = nodeSize(b);
+      const bCX = b.position.x + bw / 2;
+      if (Math.abs(bCX - dragCX) > GAP_STRIPE_TOL) continue;
+      const bTop = b.position.y;
+      const bBottom = bTop + bh;
+      if (aBottom >= bTop) continue;
+
+      const gap = bTop - aBottom;
+      if (gap <= 0) continue;
+
+      const tBelow = bBottom + gap;
+      const dBelow = Math.abs(dragPos.y - tBelow);
+      if (dBelow <= SNAP_THRESHOLD && (!best || dBelow < best.delta)) {
+        const xmid = Math.round(dragCX);
+        best = {
+          y: tBelow,
+          delta: dBelow,
+          gap: {
+            axis: "y",
+            pos: xmid,
+            span1: [aBottom, bTop],
+            span2: [bBottom, bBottom + gap],
+          },
+        };
+      }
+      const tAbove = aTop - gap - dragH;
+      const dAbove = Math.abs(dragPos.y - tAbove);
+      if (dAbove <= SNAP_THRESHOLD && (!best || dAbove < best.delta)) {
+        const xmid = Math.round(dragCX);
+        best = {
+          y: tAbove,
+          delta: dAbove,
+          gap: {
+            axis: "y",
+            pos: xmid,
+            span1: [tAbove + dragH, aTop],
+            span2: [aBottom, bTop],
+          },
+        };
+      }
+      const subGap = (bTop - aBottom - dragH) / 2;
+      if (subGap > 0) {
+        const tMid = aBottom + subGap;
+        const dMid = Math.abs(dragPos.y - tMid);
+        if (dMid <= SNAP_THRESHOLD && (!best || dMid < best.delta)) {
+          const xmid = Math.round(dragCX);
+          best = {
+            y: tMid,
+            delta: dMid,
+            gap: {
+              axis: "y",
+              pos: xmid,
+              span1: [aBottom, tMid],
+              span2: [tMid + dragH, bTop],
+            },
+          };
+        }
+      }
+    }
+  }
+  return best ? { y: best.y, gap: best.gap } : null;
+}
+
+function computeSnap(
+  dragId: string,
+  dragPos: { x: number; y: number },
+  current: Node[],
+): { x: number | null; y: number | null; guides: Guide[]; gapGuides: GapGuide[] } {
+  const drag = current.find((n) => n.id === dragId);
+  if (!drag) return { x: null, y: null, guides: [], gapGuides: [] };
+  const { w: dw, h: dh } = nodeSize(drag);
+
+  const dragEdgesX = [
+    { type: "left", val: dragPos.x },
+    { type: "centerX", val: dragPos.x + dw / 2 },
+    { type: "right", val: dragPos.x + dw },
+  ] as const;
+  const dragEdgesY = [
+    { type: "top", val: dragPos.y },
+    { type: "centerY", val: dragPos.y + dh / 2 },
+    { type: "bottom", val: dragPos.y + dh },
+  ] as const;
+
+  type Candidate = {
+    dragVal: number;
+    lineVal: number;
+    other: Node;
+    otherStart: number;
+    otherEnd: number;
+  };
+  let bestX: Candidate | null = null;
+  let bestY: Candidate | null = null;
+
+  for (const other of current) {
+    if (other.id === dragId) continue;
+    const { w: ow, h: oh } = nodeSize(other);
+    const oLeft = other.position.x;
+    const oRight = oLeft + ow;
+    const oTop = other.position.y;
+    const oBottom = oTop + oh;
+    const oCx = oLeft + ow / 2;
+    const oCy = oTop + oh / 2;
+
+    const otherXLines = [oLeft, oCx, oRight];
+    for (const d of dragEdgesX) {
+      for (const ov of otherXLines) {
+        const delta = Math.abs(d.val - ov);
+        if (
+          delta <= SNAP_THRESHOLD &&
+          (!bestX || delta < Math.abs(bestX.dragVal - bestX.lineVal))
+        ) {
+          bestX = {
+            dragVal: d.val,
+            lineVal: ov,
+            other,
+            otherStart: oTop,
+            otherEnd: oBottom,
+          };
+        }
+      }
+    }
+    const otherYLines = [oTop, oCy, oBottom];
+    for (const d of dragEdgesY) {
+      for (const ov of otherYLines) {
+        const delta = Math.abs(d.val - ov);
+        if (
+          delta <= SNAP_THRESHOLD &&
+          (!bestY || delta < Math.abs(bestY.dragVal - bestY.lineVal))
+        ) {
+          bestY = {
+            dragVal: d.val,
+            lineVal: ov,
+            other,
+            otherStart: oLeft,
+            otherEnd: oRight,
+          };
+        }
+      }
+    }
+  }
+
+  let snappedX = bestX ? bestX.lineVal - (bestX.dragVal - dragPos.x) : null;
+  let snappedY = bestY ? bestY.lineVal - (bestY.dragVal - dragPos.y) : null;
+
+  // Try equal-gap snap on each axis only if there's no edge-snap already.
+  const gapGuides: GapGuide[] = [];
+  if (snappedX === null) {
+    const gapX = computeGapSnapX(dragId, dragPos, dw, dh, current);
+    if (gapX) {
+      snappedX = gapX.x;
+      gapGuides.push(gapX.gap);
+    }
+  }
+  if (snappedY === null) {
+    const gapY = computeGapSnapY(dragId, dragPos, dw, dh, current);
+    if (gapY) {
+      snappedY = gapY.y;
+      gapGuides.push(gapY.gap);
+    }
+  }
+
+  const dragLeft = snappedX ?? dragPos.x;
+  const dragTop = snappedY ?? dragPos.y;
+  const dragRight = dragLeft + dw;
+  const dragBottom = dragTop + dh;
+
+  const guides: Guide[] = [];
+  if (bestX) {
+    guides.push({
+      axis: "v",
+      pos: bestX.lineVal,
+      start: Math.min(dragTop, bestX.otherStart),
+      end: Math.max(dragBottom, bestX.otherEnd),
+    });
+  }
+  if (bestY) {
+    guides.push({
+      axis: "h",
+      pos: bestY.lineVal,
+      start: Math.min(dragLeft, bestY.otherStart),
+      end: Math.max(dragRight, bestY.otherEnd),
+    });
+  }
+  return { x: snappedX, y: snappedY, guides, gapGuides };
 }
 
 function buildEdges(data: WorkingOnData, editingEdgeId: string | null): Edge[] {
@@ -77,11 +417,11 @@ function buildEdges(data: WorkingOnData, editingEdgeId: string | null): Edge[] {
     type: "labeled",
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: "#b23a48",
-      width: 18,
-      height: 18,
+      color: EDGE_COLOR,
+      width: 16,
+      height: 16,
     },
-    style: { stroke: "#b23a48", strokeWidth: 2 },
+    style: { stroke: EDGE_COLOR, strokeWidth: 1.6 },
     data: {
       label: e.label ?? "",
       editing: editingEdgeId === e.id,
@@ -89,13 +429,19 @@ function buildEdges(data: WorkingOnData, editingEdgeId: string | null): Edge[] {
   }));
 }
 
-function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selectedIssueId }: WorkingOnBoardProps) {
+function BoardInner({ data, loaded, issuesById, setData, undo, onSelectIssue, selectedIssueId }: WorkingOnBoardProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  const [linking, setLinking] = useState<
+    { mode: "off" } | { mode: "source" } | { mode: "target"; source: string }
+  >({ mode: "off" });
   const reactFlow = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const linkJustFinishedRef = useRef(0);
+  const [snapGuides, setSnapGuides] = useState<Guide[]>([]);
+  const [gapGuides, setGapGuides] = useState<GapGuide[]>([]);
 
   const edges = useMemo(() => buildEdges(data, editingEdgeId), [data, editingEdgeId]);
 
@@ -114,7 +460,7 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
   }, [selectedIssueId]);
 
   const commitNote = useCallback(
-    (id: string, patch: { body: string }) => {
+    (id: string, patch: { body?: string; color?: string }) => {
       setData((prev) => ({
         ...prev,
         noteNodes: prev.noteNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
@@ -149,7 +495,7 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
         ...n,
         data: {
           ...n.data,
-          onCommit: (patch: { body: string }) => commitNote(n.id, patch),
+          onCommit: (patch: { body?: string; color?: string }) => commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
         } as unknown as Record<string, unknown>,
       };
@@ -170,10 +516,45 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
       setNodes((current) => {
-        const next = applyNodeChanges(changes, current);
-        // Commit any settled position changes back to data.
-        const settled = changes.filter(
-          (c): c is Extract<NodeChange, { type: "position" }> => c.type === "position" && c.dragging === false,
+        // Snap-to-align (edge + equal-gap): rewrite live drag position changes
+        // when within SNAP_THRESHOLD of another node's edge / centre line, or
+        // when D could equalise the gap between two stationary cards. Emit
+        // matching guides until release.
+        let liveGuides: Guide[] | null = null;
+        let liveGapGuides: GapGuide[] | null = null;
+        const adjusted = changes.map((c) => {
+          if (c.type === "position" && c.dragging && c.position) {
+            const snap = computeSnap(c.id, c.position, current);
+            liveGuides = snap.guides;
+            liveGapGuides = snap.gapGuides;
+            if (snap.x !== null || snap.y !== null) {
+              return {
+                ...c,
+                position: {
+                  x: snap.x ?? c.position.x,
+                  y: snap.y ?? c.position.y,
+                },
+              };
+            }
+          }
+          return c;
+        });
+
+        const anyLiveDrag = changes.some(
+          (c) => c.type === "position" && c.dragging === true,
+        );
+        if (!anyLiveDrag) {
+          if (snapGuides.length > 0) setSnapGuides([]);
+          if (gapGuides.length > 0) setGapGuides([]);
+        } else {
+          if (liveGuides) setSnapGuides(liveGuides);
+          if (liveGapGuides) setGapGuides(liveGapGuides);
+        }
+
+        const next = applyNodeChanges(adjusted, current);
+        const settled = adjusted.filter(
+          (c): c is Extract<NodeChange, { type: "position" }> =>
+            c.type === "position" && c.dragging === false,
         );
         if (settled.length > 0) {
           setData((prev) => {
@@ -198,7 +579,7 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
         return next;
       });
     },
-    [setData],
+    [setData, snapGuides.length, gapGuides.length],
   );
 
   const onConnect = useCallback(
@@ -249,15 +630,122 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
 
   const onNodeClick = useCallback(
     (_evt: React.MouseEvent, node: Node) => {
+      if (linking.mode === "source") {
+        setLinking({ mode: "target", source: node.id });
+        return;
+      }
+      if (linking.mode === "target") {
+        if (node.id !== linking.source) {
+          const id = shortId("e");
+          setData((prev) => ({
+            ...prev,
+            edges: [
+              ...prev.edges,
+              { id, source: linking.source, target: node.id } satisfies WorkingOnEdge,
+            ],
+          }));
+        }
+        setLinking({ mode: "off" });
+        return;
+      }
       if (node.type === "issue") onSelectIssue?.(node.id);
     },
-    [onSelectIssue],
+    [linking, setData, onSelectIssue, data],
   );
 
-  const onPaneClick = useCallback(() => {
-    setMenu(null);
-    onSelectIssue?.(null);
-  }, [onSelectIssue]);
+  // Global hotkeys: X = link mode, C = undo, Esc = cancel link mode.
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const onKey = (evt: KeyboardEvent) => {
+      if (evt.metaKey || evt.ctrlKey || evt.altKey) return;
+      if (isEditable(evt.target) || isEditable(document.activeElement)) return;
+      if (evt.key === "Escape" && linking.mode !== "off") {
+        setLinking({ mode: "off" });
+        return;
+      }
+      if (evt.key === "x" || evt.key === "X") {
+        evt.preventDefault();
+        setLinking((prev) => (prev.mode === "off" ? { mode: "source" } : { mode: "off" }));
+        return;
+      }
+      if ((evt.key === "c" || evt.key === "C") && undo) {
+        evt.preventDefault();
+        undo();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [linking.mode, undo]);
+
+  // Resolve a friendly label for the source node so the user remembers what they picked.
+  const sourceLabel = useMemo(() => {
+    if (linking.mode !== "target") return null;
+    const id = linking.source;
+    if (issuesById.has(id)) {
+      const iss = issuesById.get(id)!;
+      return `${iss.identifier} · ${iss.title}`;
+    }
+    const note = data.noteNodes.find((n) => n.id === id);
+    if (note) {
+      const title = note.body.split("\n")[0]?.trim();
+      return `note · ${title || "(untitled)"}`;
+    }
+    return id;
+  }, [linking, issuesById, data.noteNodes]);
+
+  // Imperatively focus a freshly-created note's textarea — wins races with
+  // ReactFlow's pane focus refresh and StrictMode mount/cleanup.
+  const focusNewNote = useCallback((id: string) => {
+    const grab = () => {
+      const el = document.querySelector(
+        `textarea[data-note-textarea="${id}"]`,
+      ) as HTMLTextAreaElement | null;
+      if (el && document.activeElement !== el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    };
+    requestAnimationFrame(() => {
+      grab();
+      setTimeout(grab, 30);
+      setTimeout(grab, 100);
+    });
+  }, []);
+
+  const onPaneClick = useCallback(
+    (evt: React.MouseEvent) => {
+      setMenu(null);
+      // Linking mode: second click on empty pane spawns a new note at the
+      // cursor and wires the source → note edge in one undo step.
+      if (linking.mode === "target") {
+        const pt = reactFlow.screenToFlowPosition({ x: evt.clientX, y: evt.clientY });
+        const noteId = shortId("n");
+        const edgeId = shortId("e");
+        const srcId = linking.source;
+        setData((prev) => ({
+          ...prev,
+          noteNodes: [...prev.noteNodes, { id: noteId, body: "", x: pt.x, y: pt.y }],
+          edges: [
+            ...prev.edges,
+            { id: edgeId, source: srcId, target: noteId } satisfies WorkingOnEdge,
+          ],
+        }));
+        setEditingNoteId(noteId);
+        setLinking({ mode: "off" });
+        linkJustFinishedRef.current = Date.now();
+        focusNewNote(noteId);
+        return;
+      }
+      onSelectIssue?.(null);
+    },
+    [linking, reactFlow, setData, focusNewNote, onSelectIssue],
+  );
 
   // Double-click on the empty pane creates a new note. We attach this at the
   // wrapper level (not via onPaneClick) because `selectionOnDrag` makes
@@ -265,10 +753,12 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
   // detail===2 detection on the pane handler.
   const onWrapperDoubleClick = useCallback(
     (evt: React.MouseEvent) => {
+      // Suppress the dblclick branch if the leading click just spawned a linked
+      // note (otherwise a fast double-click in linking mode would create two).
+      if (Date.now() - linkJustFinishedRef.current < 400) return;
+
       const target = evt.target as Element | null;
       if (!target) return;
-      // Only proceed when the dblclick lands on the empty pane (not a node, edge,
-      // control, minimap, or any of our own overlays).
       if (target.closest(".react-flow__node")) return;
       if (target.closest(".react-flow__edge")) return;
       if (target.closest(".react-flow__controls")) return;
@@ -282,25 +772,9 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
         noteNodes: [...prev.noteNodes, { id, body: "", x: pt.x, y: pt.y }],
       }));
       setEditingNoteId(id);
-      // Re-grab focus over a few ticks to win the race against ReactFlow's
-      // internal pane refocus and StrictMode's double-mount.
-      const grab = () => {
-        const el = document.querySelector(
-          `textarea[data-note-textarea="${id}"]`,
-        ) as HTMLTextAreaElement | null;
-        if (el && document.activeElement !== el) {
-          el.focus();
-          const len = el.value.length;
-          el.setSelectionRange(len, len);
-        }
-      };
-      requestAnimationFrame(() => {
-        grab();
-        setTimeout(grab, 30);
-        setTimeout(grab, 100);
-      });
+      focusNewNote(id);
     },
-    [reactFlow, setData],
+    [reactFlow, setData, focusNewNote],
   );
 
   const localCoords = useCallback((evt: { clientX: number; clientY: number }) => {
@@ -373,6 +847,47 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
           loading working_on…
         </div>
       )}
+      {linking.mode !== "off" && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--paper)",
+            border: "1px solid var(--hairline)",
+            borderRadius: 6,
+            padding: "6px 14px",
+            boxShadow: "0 4px 14px rgba(26,24,20,0.18)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            fontFamily: "var(--sans)",
+            fontSize: 12,
+            color: "var(--ink)",
+            zIndex: 30,
+            pointerEvents: "none",
+          }}
+        >
+          <span
+            style={{
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "var(--warm-red)",
+              fontWeight: 700,
+            }}
+          >
+            Linking
+          </span>
+          <span style={{ color: "var(--ink-soft)" }}>
+            {linking.mode === "source"
+              ? "click source card"
+              : `from ${sourceLabel} → click target`}
+          </span>
+          <span style={{ color: "var(--muted)", fontSize: 10 }}>esc / x to cancel</span>
+        </div>
+      )}
       <ReactFlow
         nodes={decoratedNodes}
         edges={decoratedEdges}
@@ -394,6 +909,118 @@ function BoardInner({ data, loaded, issuesById, setData, onSelectIssue, selected
         {...SHARED_FLOW_PROPS}
       >
         <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
+        <ViewportPortal>
+          {snapGuides.map((g, i) => (
+            <div
+              key={`a${i}`}
+              style={{
+                position: "absolute",
+                left: g.axis === "v" ? g.pos - 0.5 : g.start,
+                top: g.axis === "v" ? g.start : g.pos - 0.5,
+                width: g.axis === "v" ? 1 : g.end - g.start,
+                height: g.axis === "v" ? g.end - g.start : 1,
+                background: "var(--warm-red)",
+                opacity: 0.85,
+                pointerEvents: "none",
+                zIndex: 10,
+              }}
+            />
+          ))}
+          {gapGuides.map((g, i) =>
+            g.axis === "x" ? (
+              <div key={`g${i}`}>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: g.span1[0],
+                    top: g.pos - 0.5,
+                    width: g.span1[1] - g.span1[0],
+                    height: 1,
+                    background: "var(--warm-red)",
+                    opacity: 0.85,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                  }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    left: g.span2[0],
+                    top: g.pos - 0.5,
+                    width: g.span2[1] - g.span2[0],
+                    height: 1,
+                    background: "var(--warm-red)",
+                    opacity: 0.85,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                  }}
+                />
+                {/* Caps at both ends of each span */}
+                {[g.span1[0], g.span1[1], g.span2[0], g.span2[1]].map((x, j) => (
+                  <div
+                    key={`gc${i}_${j}`}
+                    style={{
+                      position: "absolute",
+                      left: x - 0.5,
+                      top: g.pos - 4,
+                      width: 1,
+                      height: 8,
+                      background: "var(--warm-red)",
+                      opacity: 0.85,
+                      pointerEvents: "none",
+                      zIndex: 10,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div key={`g${i}`}>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: g.pos - 0.5,
+                    top: g.span1[0],
+                    width: 1,
+                    height: g.span1[1] - g.span1[0],
+                    background: "var(--warm-red)",
+                    opacity: 0.85,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                  }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    left: g.pos - 0.5,
+                    top: g.span2[0],
+                    width: 1,
+                    height: g.span2[1] - g.span2[0],
+                    background: "var(--warm-red)",
+                    opacity: 0.85,
+                    pointerEvents: "none",
+                    zIndex: 10,
+                  }}
+                />
+                {[g.span1[0], g.span1[1], g.span2[0], g.span2[1]].map((y, j) => (
+                  <div
+                    key={`gc${i}_${j}`}
+                    style={{
+                      position: "absolute",
+                      left: g.pos - 4,
+                      top: y - 0.5,
+                      width: 8,
+                      height: 1,
+                      background: "var(--warm-red)",
+                      opacity: 0.85,
+                      pointerEvents: "none",
+                      zIndex: 10,
+                    }}
+                  />
+                ))}
+              </div>
+            ),
+          )}
+        </ViewportPortal>
         <Controls position="bottom-right" showInteractive={false} />
         <MiniMap
           position="bottom-left"
