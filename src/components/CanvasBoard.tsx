@@ -113,6 +113,7 @@ function buildNodes(
         id: note.id,
         body: note.body,
         color: note.color,
+        working: note.working ?? false,
         done: note.done ?? false,
         autoEdit: note.id === editingNoteId,
       } as unknown as Record<string, unknown>,
@@ -478,16 +479,16 @@ function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
   }));
 }
 
-// Shared color palette that floats above the bounding box of a multi-note
-// selection. Only renders when ≥2 note nodes are selected. Lives inside
-// `<ReactFlow>` so it sits in the same coordinate origin as the renderer:
-// flow→screen via the live store transform keeps the palette at constant
-// pixel size regardless of zoom, but pinned to the moving bbox in flow space.
-function MultiNoteSelectionPalette({
-  activeColor,
+// Shared color palette that floats above the bounding box of selected note
+// nodes — same UX for single-select and multi-select (≥1 selected). Lives
+// inside `<ReactFlow>` so it sits in the same coordinate origin as the
+// renderer: flow→screen via the live store transform keeps the palette at
+// constant pixel size regardless of zoom, but pinned to the moving bbox in
+// flow space. Active swatch highlights only when every selected card shares
+// the same color (mixed selections show no active state).
+function NoteSelectionPalette({
   onApply,
 }: {
-  activeColor: string | null;
   onApply: (ids: string[], color: string) => void;
 }) {
   const transform = useStore((s) => s.transform);
@@ -498,16 +499,20 @@ function MultiNoteSelectionPalette({
     [allNodes],
   );
 
-  if (sel.length < 2) return null;
+  if (sel.length < 1) return null;
 
   let maxRight = -Infinity;
   let minTop = Infinity;
+  const colorSet = new Set<string>();
   for (const n of sel) {
     const measured = (n as { measured?: { width?: number } }).measured;
     const w = (measured?.width ?? (n as { width?: number }).width ?? 280) as number;
     if (n.position.x + w > maxRight) maxRight = n.position.x + w;
     if (n.position.y < minTop) minTop = n.position.y;
+    const c = (n.data as { color?: string } | undefined)?.color ?? DEFAULT_NOTE_COLOR;
+    colorSet.add(c);
   }
+  const activeColor = colorSet.size === 1 ? [...colorSet][0]! : null;
 
   const [tx, ty, zoom] = transform;
   const screenX = maxRight * zoom + tx;
@@ -708,7 +713,7 @@ function BoardInner({
   }, [selectedIssueId]);
 
   const commitNote = useCallback(
-    (id: string, patch: { body?: string; color?: string; done?: boolean }) => {
+    (id: string, patch: { body?: string; color?: string; working?: boolean; done?: boolean }) => {
       setData((prev) => ({
         ...prev,
         noteNodes: prev.noteNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
@@ -752,22 +757,13 @@ function BoardInner({
 
   // Augment note nodes with edit handlers (passed via data; functions are stable enough per render).
   const decoratedNodes = useMemo(() => {
-    // Count selected note nodes so each one knows whether it's part of a
-    // multi-select (in which case the inline per-card palette hides and the
-    // board renders a single shared one).
-    const selectedNoteCount = nodes.reduce(
-      (acc, n) => (n.type === "note" && n.selected ? acc + 1 : acc),
-      0,
-    );
-    const multi = selectedNoteCount >= 2;
     return nodes.map((n) => {
       if (n.type !== "note") return n;
       return {
         ...n,
         data: {
           ...n.data,
-          multiSelected: multi && Boolean(n.selected),
-          onCommit: (patch: { body?: string; color?: string; done?: boolean }) =>
+          onCommit: (patch: { body?: string; color?: string; working?: boolean; done?: boolean }) =>
             commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
         } as unknown as Record<string, unknown>,
@@ -1294,7 +1290,7 @@ function BoardInner({
           } else if (n.type === "note") {
             const note = dataRef.current.noteNodes.find((nn) => nn.id === n.id);
             if (!note) continue;
-            items.push({ kind: "note", body: note.body, color: note.color, done: note.done, dx, dy });
+            items.push({ kind: "note", body: note.body, color: note.color, working: note.working, done: note.done, dx, dy });
           } else {
             continue;
           }
@@ -1367,13 +1363,14 @@ function BoardInner({
               id = shortId("n");
               localIdxToNewId[idx] = id;
             }
-            const note: { id: string; body: string; x: number; y: number; color?: string; done?: boolean } = {
+            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean } = {
               id,
               body: it.body,
               x,
               y,
             };
             if (it.color) note.color = it.color;
+            if (it.working) note.working = true;
             if (it.done) note.done = true;
             noteNodes.push(note);
             existingNoteIds.add(id);
@@ -1872,10 +1869,7 @@ function BoardInner({
             ),
           )}
         </ViewportPortal>
-        <MultiNoteSelectionPalette
-          activeColor={null}
-          onApply={commitNotesColor}
-        />
+        <NoteSelectionPalette onApply={commitNotesColor} />
         <Controls position="bottom-right" showInteractive={false} />
         <MiniMap
           position="bottom-left"

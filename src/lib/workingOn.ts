@@ -4,6 +4,10 @@ export interface NoteNode {
   x: number;
   y: number;
   color?: string;
+  // Three-state todo cycle: undefined/false-on-both = todo; working=true =
+  // "working on" (blue indicator); done=true = done (mutually exclusive with
+  // working — the click handler always clears the other).
+  working?: boolean;
   done?: boolean;
 }
 

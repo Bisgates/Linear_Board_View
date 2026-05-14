@@ -12,7 +12,7 @@ const LEGACY_WORKING_ON = resolve(DATA_DIR, "working_on.json");
 
 export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
-  noteNodes: { id: string; body: string; x: number; y: number; color?: string; done?: boolean }[];
+  noteNodes: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
   groups: { id: string; memberIds: string[] }[];
 }
@@ -87,6 +87,9 @@ function validate(raw: unknown): BoardData {
         };
         if (typeof r.color === "string" && /^#[0-9a-fA-F]{3,8}$/.test(r.color)) {
           note.color = r.color;
+        }
+        if (typeof r.working === "boolean") {
+          note.working = r.working;
         }
         if (typeof r.done === "boolean") {
           note.done = r.done;

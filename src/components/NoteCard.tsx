@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { DEFAULT_NOTE_COLOR, NOTE_COLORS, openLocalPath } from "../lib/workingOn";
+import { DEFAULT_NOTE_COLOR, openLocalPath } from "../lib/workingOn";
 
 // Match http(s) URLs and absolute Mac / Linux file paths (common roots only).
 // Stops at whitespace and common trailing punctuation so a URL in parens or a
@@ -69,20 +69,20 @@ interface NoteData {
   id: string;
   body: string;
   color?: string;
+  working?: boolean;
   done?: boolean;
   autoEdit?: boolean;
-  // When this card is part of a multi-note selection (≥2 notes selected), the
-  // board renders a single shared color palette near the selection bounding
-  // box; individual cards hide their inline palette so it doesn't appear N
-  // times. Editing still shows the inline palette on that one card.
-  multiSelected?: boolean;
-  onCommit?: (patch: { body?: string; color?: string; done?: boolean }) => void;
+  onCommit?: (patch: { body?: string; color?: string; working?: boolean; done?: boolean }) => void;
   onEditEnd?: () => void;
 }
 
 // When a note is marked done, swap the saturated accent for a muted gray so the
 // card visibly recedes on the board (Apple Reminders / Things style).
 const DONE_FRAME_COLOR = "#a8a39a";
+// "Working on" indicator color — a slightly-muted vivid blue that fits the
+// warm-paper palette but reads clearly distinct from the slate blue swatch in
+// `NOTE_COLORS` (which is user-pickable as a card frame color).
+const WORKING_COLOR = "#3b6fb8";
 
 type Props = NodeProps & { data: NoteData };
 
@@ -100,6 +100,10 @@ function NoteCardImpl({ data, selected }: Props) {
 
   const accent = data.color ?? DEFAULT_NOTE_COLOR;
   const done = Boolean(data.done);
+  const working = !done && Boolean(data.working);
+  const status: "todo" | "working" | "done" = done ? "done" : working ? "working" : "todo";
+  // The card frame still recedes to gray only when done — "working on" keeps
+  // the user's chosen accent so an in-progress card stays visually full color.
   const color = done ? DONE_FRAME_COLOR : accent;
   const handleStyle: React.CSSProperties = {
     width: 10,
@@ -241,54 +245,17 @@ function NoteCardImpl({ data, selected }: Props) {
         }}
       >
         <span>Note</span>
-        {(editing || (selected && !data.multiSelected)) && (
-          <div
-            className="nodrag nopan"
-            style={{
-              display: "flex",
-              gap: 4,
-              alignItems: "center",
-              flex: 1,
-              justifyContent: "flex-end",
-              marginRight: 4,
-            }}
-          >
-            {NOTE_COLORS.map((c) => {
-              const active = c === color;
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  aria-label={`color ${c}`}
-                  className="nodrag nopan"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (c !== color) data.onCommit?.({ color: c });
-                  }}
-                  style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: 3,
-                    background: c,
-                    border: active ? "1.5px solid var(--ink)" : "1px solid rgba(26,24,20,0.15)",
-                    cursor: "pointer",
-                    padding: 0,
-                    transition: "transform 0.1s",
-                  }}
-                />
-              );
-            })}
-          </div>
-        )}
         <button
           type="button"
           role="checkbox"
-          aria-checked={done}
-          aria-label={done ? "mark as todo" : "mark as done"}
+          aria-checked={done ? true : working ? "mixed" : false}
+          aria-label={
+            status === "todo"
+              ? "mark as working on"
+              : status === "working"
+                ? "mark as done"
+                : "mark as todo"
+          }
           className="nodrag nopan"
           onMouseDown={(e) => {
             e.preventDefault();
@@ -296,21 +263,35 @@ function NoteCardImpl({ data, selected }: Props) {
           }}
           onClick={(e) => {
             e.stopPropagation();
-            data.onCommit?.({ done: !done });
+            // Three-state cycle: todo → working → done → todo.
+            if (status === "todo") data.onCommit?.({ working: true, done: false });
+            else if (status === "working") data.onCommit?.({ working: false, done: true });
+            else data.onCommit?.({ working: false, done: false });
           }}
           style={{
             width: 15,
             height: 15,
             borderRadius: 4,
-            // Things 3 — when empty, a hairline rounded square with a soft
-            // inset shadow gives the "stamped into paper" feel; when checked,
-            // the frame fills with the done accent and shows a bold,
-            // slightly-tilted diagonal check.
-            border: done ? `1px solid ${color}` : "1px solid rgba(26,24,20,0.22)",
-            background: done ? color : "var(--paper)",
-            boxShadow: done
-              ? "0 1px 0 rgba(26,24,20,0.06)"
-              : "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)",
+            // Three states: todo = hairline empty paper (stamped-in look);
+            // working = filled WORKING_COLOR with a centered white bar
+            // (Things 3 "in-progress" affordance); done = filled with the
+            // frame color and a bold tilted check.
+            border:
+              status === "todo"
+                ? "1px solid rgba(26,24,20,0.22)"
+                : status === "working"
+                  ? `1px solid ${WORKING_COLOR}`
+                  : `1px solid ${color}`,
+            background:
+              status === "todo"
+                ? "var(--paper)"
+                : status === "working"
+                  ? WORKING_COLOR
+                  : color,
+            boxShadow:
+              status === "todo"
+                ? "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)"
+                : "0 1px 0 rgba(26,24,20,0.06)",
             cursor: "pointer",
             padding: 0,
             display: "flex",
@@ -319,7 +300,18 @@ function NoteCardImpl({ data, selected }: Props) {
             transition: "background 0.14s, border-color 0.14s, box-shadow 0.14s",
           }}
         >
-          {done && (
+          {status === "working" && (
+            <span
+              style={{
+                display: "block",
+                width: 7,
+                height: 2,
+                borderRadius: 1,
+                background: "var(--paper)",
+              }}
+            />
+          )}
+          {status === "done" && (
             <svg
               width={11}
               height={11}

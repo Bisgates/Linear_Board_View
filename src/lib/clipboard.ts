@@ -17,6 +17,7 @@ export interface ClipboardItemNote {
   kind: "note";
   body: string;
   color?: string;
+  working?: boolean;
   done?: boolean;
   dx: number;
   dy: number;
