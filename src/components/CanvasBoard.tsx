@@ -26,7 +26,16 @@ import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { BoardData, BoardEdge } from "../lib/workingOn";
-import { shortId } from "../lib/workingOn";
+import { DEFAULT_NOTE_COLOR, shortId } from "../lib/workingOn";
+import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
+import {
+  DEFAULT_LAYOUT_CONFIG,
+  computeChildPos,
+  computeSiblingPos,
+  findNeighbor,
+  type Direction,
+  type NodeGeo,
+} from "../lib/mindmapLayout";
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -58,6 +67,11 @@ interface CanvasBoardProps {
   initialPositions?: Record<string, { x: number; y: number }>;
   /** Hide the loading overlay text. Each view names its own store differently. */
   loadingLabel?: string;
+  /** App-level clipboard buffer (shared across boards). When provided, ⌘C/⌘V are enabled. */
+  clipboard?: ClipboardPayload | null;
+  setClipboard?: (p: ClipboardPayload | null) => void;
+  /** Lightweight toast hook used to surface "N items skipped" notices. */
+  onClipboardToast?: (kind: "info" | "success" | "error", msg: string) => void;
 }
 
 function buildNodes(
@@ -65,6 +79,7 @@ function buildNodes(
   data: BoardData,
   initialPositions: Record<string, { x: number; y: number }> | undefined,
   editingNoteId: string | null,
+  focusedCardId: string | null,
 ): Node[] {
   const nodes: Node[] = [];
   for (const issue of displayedIssues) {
@@ -75,6 +90,7 @@ function buildNodes(
       position: { x: pos.x, y: pos.y },
       data: issue as unknown as Record<string, unknown>,
       draggable: true,
+      selected: issue.id === focusedCardId,
     });
   }
   for (const note of data.noteNodes) {
@@ -89,6 +105,7 @@ function buildNodes(
         autoEdit: note.id === editingNoteId,
       } as unknown as Record<string, unknown>,
       draggable: true,
+      selected: note.id === focusedCardId,
     });
   }
   return nodes;
@@ -459,11 +476,38 @@ function BoardInner({
   selectedIssueId,
   initialPositions,
   loadingLabel,
+  clipboard,
+  setClipboard,
+  onClipboardToast,
 }: CanvasBoardProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  // Board-level keyboard focus — the card that arrow keys / Space / Tab /
+  // Shift+Tab act on. Distinct from `selectedIssueId` (which gates the
+  // right-hand DetailPanel): arrow nav moves the halo without opening any
+  // panel, and the halo can live on a note (which has no DetailPanel at all).
+  const [focusedCardId, setFocusedCardId] = useState<string | null>(selectedIssueId ?? null);
+  // Mirror the latest focusedCardId so the global keydown listener (which is
+  // installed once and lives across renders) can read it without being torn
+  // down and reattached on every focus change.
+  const focusedCardIdRef = useRef<string | null>(focusedCardId);
+  useEffect(() => {
+    focusedCardIdRef.current = focusedCardId;
+  }, [focusedCardId]);
+  // Same mirror for editingNoteId so Space/Esc can read it from the listener.
+  const editingNoteIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    editingNoteIdRef.current = editingNoteId;
+  }, [editingNoteId]);
+  // And for the current data snapshot, used by Tab / Shift+Tab to compute
+  // placement and apply shifts without forcing the listener effect to rebind
+  // on every BoardData change.
+  const dataRef = useRef(data);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
   const [linking, setLinking] = useState<
     { mode: "off" } | { mode: "source" } | { mode: "target"; source: string }
   >({ mode: "off" });
@@ -481,10 +525,14 @@ function BoardInner({
     return m;
   }, [displayedIssues]);
 
-  // Rebuild nodes when data shape changes (counts / contents).
+  // Rebuild nodes when data shape changes (counts / contents) or when the
+  // halo / edit target moves. `selected` and `autoEdit` are baked in by
+  // buildNodes so they survive every rebuild — without this, e.g. Cmd+Enter
+  // (which clears editingNoteId) would wipe the halo because the rebuild
+  // overwrites the per-node `selected` flag.
   useEffect(() => {
-    setNodes(buildNodes(displayedIssues, data, initialPositions, editingNoteId));
-  }, [displayedIssues, data, initialPositions, editingNoteId]);
+    setNodes(buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId));
+  }, [displayedIssues, data, initialPositions, editingNoteId, focusedCardId]);
 
   // Rebuild edges from data, preserving the currently-selected edge's
   // selection flag so click-to-select survives the rebuild. Without this
@@ -503,13 +551,12 @@ function BoardInner({
     setEdges((current) => applyEdgeChanges(changes, current));
   }, []);
 
-  // Sync selection halo from outside.
+  // External `selectedIssueId` change → bring focus along (e.g. click in the
+  // issue picker selects an issue; mind-map focus should follow). The halo
+  // itself is baked into buildNodes by `focusedCardId`, so no separate sync
+  // effect is needed.
   useEffect(() => {
-    setNodes((current) =>
-      current.map((n) =>
-        n.selected === (n.id === selectedIssueId) ? n : { ...n, selected: n.id === selectedIssueId },
-      ),
-    );
+    if (selectedIssueId) setFocusedCardId(selectedIssueId);
   }, [selectedIssueId]);
 
   const commitNote = useCallback(
@@ -701,25 +748,117 @@ function BoardInner({
         setLinking({ mode: "off" });
         return;
       }
+      setFocusedCardId(node.id);
       if (node.type === "issue") onSelectIssue?.(node.id);
     },
     [linking, setData, onSelectIssue, data],
   );
 
-  // Global hotkeys: X = link mode, C = undo, Esc = cancel link mode.
+  // Snapshot xyflow's current measured nodes as plain geo records — fed to
+  // the pure mindmap-layout helpers (findNeighbor / computeChildPos /
+  // computeSiblingPos). Reads from the live ReactFlow store, not React state,
+  // so we always get the latest measured dimensions.
+  const getNodeGeos = useCallback((): NodeGeo[] => {
+    const rfNodes = reactFlow.getNodes();
+    return rfNodes.map((n) => ({
+      id: n.id,
+      x: n.position.x,
+      y: n.position.y,
+      w:
+        (n as { measured?: { width?: number } }).measured?.width ??
+        n.width ??
+        DEFAULT_LAYOUT_CONFIG.defaultW,
+      h:
+        (n as { measured?: { height?: number } }).measured?.height ??
+        n.height ??
+        DEFAULT_LAYOUT_CONFIG.defaultH,
+    }));
+  }, [reactFlow]);
+
+  // Apply the layout helpers' `shifts` array to issueMembers + noteNodes,
+  // append the new note + (optional) edge, and emit one combined setData.
+  // Used by both Tab (child) and Shift+Tab (sibling).
+  const insertCardWithLayout = useCallback(
+    (
+      placement: { x: number; y: number; shifts: { id: string; dy: number }[] },
+      parentEdgeSource: string | null,
+      color: string,
+    ) => {
+      const newId = shortId("n");
+      const newEdgeId = shortId("e");
+      setData((prev) => {
+        const issueMembers = { ...prev.issueMembers };
+        for (const sh of placement.shifts) {
+          const cur = issueMembers[sh.id];
+          if (cur) issueMembers[sh.id] = { x: cur.x, y: cur.y + sh.dy };
+        }
+        const noteNodes = prev.noteNodes.map((n) => {
+          const sh = placement.shifts.find((s) => s.id === n.id);
+          return sh ? { ...n, y: n.y + sh.dy } : n;
+        });
+        noteNodes.push({ id: newId, body: "", x: placement.x, y: placement.y, color });
+        const edges =
+          parentEdgeSource !== null
+            ? [
+                ...prev.edges,
+                {
+                  id: newEdgeId,
+                  source: parentEdgeSource,
+                  target: newId,
+                } satisfies BoardEdge,
+              ]
+            : prev.edges;
+        return { ...prev, issueMembers, noteNodes, edges };
+      });
+      setFocusedCardId(newId);
+      setEditingNoteId(newId);
+    },
+    [setData],
+  );
+
+  // Global hotkeys (board-scope, work whenever no text input is focused):
+  //   X         = link mode toggle
+  //   C         = undo
+  //   Esc       = exit link mode OR exit note-edit mode (halo stays put)
+  //   ↑↓←→     = spatial-nearest-neighbor card navigation (no DetailPanel)
+  //   Space     = note → enter inline edit; issue → open DetailPanel
+  //   Tab       = generate child note (Linear issue → note, note → note)
+  //   Shift+Tab = generate sibling note under the same incoming-edge parent
   useEffect(() => {
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
       return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
     };
+    const ARROW_DIR: Record<string, Direction> = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
     const onKey = (evt: KeyboardEvent) => {
+      // Note: we deliberately allow Shift through (needed for Shift+Tab).
       if (evt.metaKey || evt.ctrlKey || evt.altKey) return;
-      if (isEditable(evt.target) || isEditable(document.activeElement)) return;
-      if (evt.key === "Escape" && linking.mode !== "off") {
-        setLinking({ mode: "off" });
+      const editable = isEditable(evt.target) || isEditable(document.activeElement);
+
+      // Esc has two jobs: clear link mode first, then exit note-edit (keep halo).
+      if (evt.key === "Escape") {
+        if (linking.mode !== "off") {
+          setLinking({ mode: "off" });
+          return;
+        }
+        if (editingNoteIdRef.current) {
+          evt.preventDefault();
+          setEditingNoteId(null);
+          // focusedCardId untouched — halo stays on the card we just exited.
+          return;
+        }
         return;
       }
+
+      // The rest of the hotkeys never fire when a text input has focus.
+      if (editable) return;
+
       if (evt.key === "x" || evt.key === "X") {
         evt.preventDefault();
         setLinking((prev) => (prev.mode === "off" ? { mode: "source" } : { mode: "off" }));
@@ -731,10 +870,226 @@ function BoardInner({
         console.log(`[canvas-board] undo via C key → ${ok ? "ok" : "nothing to undo"}`);
         return;
       }
+
+      // Arrow-key navigation — no preventDefault unless a target was found,
+      // so unhandled arrows still bubble (e.g. before the user clicks anything).
+      const dir = ARROW_DIR[evt.key];
+      if (dir) {
+        const focusId = focusedCardIdRef.current;
+        if (!focusId) return;
+        const next = findNeighbor(focusId, dir, getNodeGeos());
+        if (next) {
+          evt.preventDefault();
+          setFocusedCardId(next);
+        }
+        return;
+      }
+
+      // Space — Note: editingNoteIdRef.current check is mostly defensive;
+      // when the textarea is open the listener has already bailed via the
+      // `editable` guard above.
+      if (evt.key === " " || evt.code === "Space") {
+        const focusId = focusedCardIdRef.current;
+        if (!focusId) return;
+        if (editingNoteIdRef.current) return;
+        const isNote = dataRef.current.noteNodes.some((n) => n.id === focusId);
+        evt.preventDefault();
+        if (isNote) {
+          setEditingNoteId(focusId);
+        } else {
+          // Issue → fall back to DetailPanel as the editor.
+          onSelectIssue?.(focusId);
+        }
+        return;
+      }
+
+      // Tab / Shift+Tab — generate child / sibling note. preventDefault is
+      // mandatory: otherwise the browser shifts keyboard focus out of the canvas.
+      if (evt.key === "Tab") {
+        const focusId = focusedCardIdRef.current;
+        if (!focusId) return;
+        evt.preventDefault();
+        const geos = getNodeGeos();
+        if (evt.shiftKey) {
+          const placement = computeSiblingPos(focusId, dataRef.current, geos);
+          if (!placement) return;
+          const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
+          const color = currentNote?.color ?? DEFAULT_NOTE_COLOR;
+          insertCardWithLayout(placement, placement.parentId, color);
+        } else {
+          const placement = computeChildPos(focusId, dataRef.current, geos);
+          if (!placement) return;
+          const parentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
+          const color = parentNote?.color ?? DEFAULT_NOTE_COLOR;
+          insertCardWithLayout(placement, focusId, color);
+        }
+        return;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo]);
+  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue]);
+
+  // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
+  // Lives in a separate effect from the main board hotkeys so the modifier
+  // early-return in there can stay simple. Only enabled when the App passes
+  // clipboard state through (so the board never copies in isolation).
+  useEffect(() => {
+    if (!setClipboard) return;
+    const isEditable = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const onKey = (evt: KeyboardEvent) => {
+      if (!(evt.metaKey || evt.ctrlKey)) return;
+      if (evt.key !== "c" && evt.key !== "C" && evt.key !== "v" && evt.key !== "V") return;
+      if (isEditable(evt.target) || isEditable(document.activeElement)) return;
+
+      const isCopy = evt.key === "c" || evt.key === "C";
+      if (isCopy) {
+        const selectedNodes = reactFlow.getNodes().filter((n) => n.selected);
+        if (selectedNodes.length === 0) return;
+        evt.preventDefault();
+
+        // Group centroid for relative offsets.
+        let cx = 0;
+        let cy = 0;
+        for (const n of selectedNodes) {
+          cx += n.position.x;
+          cy += n.position.y;
+        }
+        cx /= selectedNodes.length;
+        cy /= selectedNodes.length;
+
+        const items: ClipboardItem[] = [];
+        const idToLocalIdx = new Map<string, number>();
+        for (const n of selectedNodes) {
+          const dx = n.position.x - cx;
+          const dy = n.position.y - cy;
+          if (n.type === "issue") {
+            items.push({ kind: "issue", id: n.id, dx, dy });
+          } else if (n.type === "note") {
+            const note = dataRef.current.noteNodes.find((nn) => nn.id === n.id);
+            if (!note) continue;
+            items.push({ kind: "note", body: note.body, color: note.color, dx, dy });
+          } else {
+            continue;
+          }
+          idToLocalIdx.set(n.id, items.length - 1);
+        }
+        if (items.length === 0) return;
+
+        const edges: ClipboardEdge[] = [];
+        for (const e of dataRef.current.edges) {
+          const s = idToLocalIdx.get(e.source);
+          const t = idToLocalIdx.get(e.target);
+          if (s === undefined || t === undefined) continue;
+          const out: ClipboardEdge = { sourceLocalIdx: s, targetLocalIdx: t };
+          if (e.label) out.label = e.label;
+          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
+          if (e.targetHandle) out.targetHandle = e.targetHandle;
+          edges.push(out);
+        }
+
+        setClipboard({ items, edges, copiedAt: Date.now() });
+        onClipboardToast?.(
+          "success",
+          `已复制 ${items.length} 项${edges.length ? ` + ${edges.length} 条 edge` : ""}`,
+        );
+        return;
+      }
+
+      // Paste branch
+      if (!clipboard || clipboard.items.length === 0) return;
+      evt.preventDefault();
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const centerScreen = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      const center = reactFlow.screenToFlowPosition(centerScreen);
+
+      // Pre-compute final ids per local index so edges can reference them.
+      // For issue items we reuse the original id; for note items we mint fresh.
+      const localIdxToNewId: (string | null)[] = clipboard.items.map((it) => {
+        if (it.kind === "note") return shortId("n");
+        return it.id;
+      });
+
+      let skippedIssues = 0;
+      let addedIssues = 0;
+      let addedNotes = 0;
+
+      setData((prev) => {
+        const issueMembers = { ...prev.issueMembers };
+        const noteNodes = [...prev.noteNodes];
+        const existingNoteIds = new Set(noteNodes.map((n) => n.id));
+        const addedNodeIds = new Set<string>();
+
+        clipboard.items.forEach((it, idx) => {
+          const x = center.x + it.dx;
+          const y = center.y + it.dy;
+          if (it.kind === "issue") {
+            if (issueMembers[it.id]) {
+              skippedIssues += 1;
+              localIdxToNewId[idx] = null;
+              return;
+            }
+            issueMembers[it.id] = { x, y };
+            addedNodeIds.add(it.id);
+            addedIssues += 1;
+          } else {
+            // Defensive — if the freshly minted id somehow collides, mint again.
+            let id = localIdxToNewId[idx];
+            if (!id || existingNoteIds.has(id)) {
+              id = shortId("n");
+              localIdxToNewId[idx] = id;
+            }
+            const note: { id: string; body: string; x: number; y: number; color?: string } = {
+              id,
+              body: it.body,
+              x,
+              y,
+            };
+            if (it.color) note.color = it.color;
+            noteNodes.push(note);
+            existingNoteIds.add(id);
+            addedNodeIds.add(id);
+            addedNotes += 1;
+          }
+        });
+
+        const newEdges: BoardEdge[] = [];
+        for (const e of clipboard.edges) {
+          const s = localIdxToNewId[e.sourceLocalIdx];
+          const t = localIdxToNewId[e.targetLocalIdx];
+          if (!s || !t) continue;
+          if (!addedNodeIds.has(s) || !addedNodeIds.has(t)) continue;
+          const out: BoardEdge = { id: shortId("e"), source: s, target: t };
+          if (e.label) out.label = e.label;
+          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
+          if (e.targetHandle) out.targetHandle = e.targetHandle;
+          newEdges.push(out);
+        }
+
+        return {
+          ...prev,
+          issueMembers,
+          noteNodes,
+          edges: [...prev.edges, ...newEdges],
+        };
+      });
+
+      const parts: string[] = [];
+      if (addedIssues) parts.push(`${addedIssues} issue`);
+      if (addedNotes) parts.push(`${addedNotes} note`);
+      const summary = parts.length ? parts.join(" + ") : "0 项";
+      const note = skippedIssues ? `（${skippedIssues} 个 issue 已存在跳过）` : "";
+      onClipboardToast?.(skippedIssues && !addedIssues && !addedNotes ? "info" : "success", `粘贴 ${summary}${note}`);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast]);
 
   // Resolve a friendly label for the source node so the user remembers what they picked.
   const sourceLabel = useMemo(() => {
@@ -791,11 +1146,13 @@ function BoardInner({
           ],
         }));
         setEditingNoteId(noteId);
+        setFocusedCardId(noteId);
         setLinking({ mode: "off" });
         linkJustFinishedRef.current = Date.now();
         focusNewNote(noteId);
         return;
       }
+      setFocusedCardId(null);
       onSelectIssue?.(null);
     },
     [linking, reactFlow, setData, focusNewNote, onSelectIssue],
@@ -826,6 +1183,7 @@ function BoardInner({
         noteNodes: [...prev.noteNodes, { id, body: "", x: pt.x, y: pt.y }],
       }));
       setEditingNoteId(id);
+      setFocusedCardId(id);
       focusNewNote(id);
     },
     [reactFlow, setData, focusNewNote],

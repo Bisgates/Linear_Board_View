@@ -10,7 +10,17 @@ import { LinearClient } from "@linear/sdk";
 import { fetchAllIssues } from "../linear/fetchIssues.js";
 import { updateIssue, type IssuePatch } from "../linear/updateIssue.js";
 import { fetchAllWorkflowStates } from "../linear/fetchWorkflowStates.js";
-import { readBoard, writeBoard, STORE_PATHS } from "./boardStore.js";
+import {
+  readBoard,
+  writeBoard,
+  readManifest,
+  writeManifest,
+  readViewBoard,
+  writeViewBoard,
+  deleteViewBoard,
+  assertSafeViewId,
+  STORE_PATHS,
+} from "./boardStore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,14 +52,79 @@ export function linearApiPlugin(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
 
-        // Board state endpoints — one local json per board. No Linear client
-        // required (purely local visual state: positions, notes, user edges).
-        const BOARD_ENDPOINTS: Record<string, string> = {
-          "/api/working-on": STORE_PATHS.workingOn,
-          "/api/all-issues-board": STORE_PATHS.allIssuesBoard,
-        };
-        const storePath = BOARD_ENDPOINTS[url];
-        if (storePath) {
+        // Working On views manifest — GET reads (auto-migrates legacy file on first
+        // run) and PUT writes a full manifest atomically. Must be reached before the
+        // generic per-view route below so `/views` is not mistaken for an id.
+        if (url === "/api/working-on/views" || url?.split("?")[0] === "/api/working-on/views") {
+          if (req.method === "GET") {
+            try {
+              const m = await readManifest();
+              return sendJson(res, 200, m);
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "PUT") {
+            try {
+              const body = await readJson(req);
+              const saved = await writeManifest(body);
+              return sendJson(res, 200, { ok: true, data: saved });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+        }
+
+        // Per-view board state — /api/working-on/views/:viewId
+        const viewMatch = /^\/api\/working-on\/views\/([^/?#]+)/.exec(url);
+        if (viewMatch) {
+          const viewId = decodeURIComponent(viewMatch[1]!);
+          try {
+            assertSafeViewId(viewId);
+          } catch (err) {
+            return sendJson(res, 400, { ok: false, error: String(err) });
+          }
+          if (req.method === "GET") {
+            try {
+              const data = await readViewBoard(viewId);
+              return sendJson(res, 200, data);
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "PUT") {
+            try {
+              const body = await readJson(req);
+              const saved = await writeViewBoard(viewId, body);
+              return sendJson(res, 200, { ok: true, data: saved });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "DELETE") {
+            try {
+              await deleteViewBoard(viewId);
+              return sendJson(res, 200, { ok: true });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+        }
+
+        // Legacy single-board endpoint — kept for backwards compat (GET only).
+        // Returns the active view's board. PUT no longer supported here.
+        if (url === "/api/working-on" && req.method === "GET") {
+          try {
+            const m = await readManifest();
+            const data = await readViewBoard(m.activeId);
+            return sendJson(res, 200, data);
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        if (url === "/api/all-issues-board") {
+          const storePath = STORE_PATHS.allIssuesBoard;
           if (req.method === "GET") {
             try {
               const data = await readBoard(storePath);

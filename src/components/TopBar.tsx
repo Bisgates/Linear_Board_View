@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
 export type ActiveView = "all" | "working_on";
@@ -11,6 +12,10 @@ interface TopBarProps {
   totalCount?: number;
   activeView: ActiveView;
   onViewChange: (v: ActiveView) => void;
+  /** Optional label for the Working On tab (current view name). */
+  workingOnLabel?: string;
+  /** Click handler for the ▾ split button. The parent positions the dropdown using the rect handed back. */
+  onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
   leftSlot?: React.ReactNode;
 }
 
@@ -23,6 +28,8 @@ export function TopBar({
   totalCount,
   activeView,
   onViewChange,
+  workingOnLabel,
+  onWorkingOnExpand,
   leftSlot,
 }: TopBarProps) {
   return (
@@ -66,7 +73,12 @@ export function TopBar({
         </span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <ViewSwitcher value={activeView} onChange={onViewChange} />
+        <ViewSwitcher
+          value={activeView}
+          onChange={onViewChange}
+          workingOnLabel={workingOnLabel}
+          onWorkingOnExpand={onWorkingOnExpand}
+        />
         <TopBarMenu
           lastSyncAt={lastSyncAt}
           syncing={syncing}
@@ -78,11 +90,19 @@ export function TopBar({
   );
 }
 
-function ViewSwitcher({ value, onChange }: { value: ActiveView; onChange: (v: ActiveView) => void }) {
-  const items: { v: ActiveView; label: string }[] = [
-    { v: "all", label: "All Issues" },
-    { v: "working_on", label: "Working On" },
-  ];
+function ViewSwitcher({
+  value,
+  onChange,
+  workingOnLabel,
+  onWorkingOnExpand,
+}: {
+  value: ActiveView;
+  onChange: (v: ActiveView) => void;
+  workingOnLabel?: string;
+  onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
+}) {
+  const workingOnRef = useRef<HTMLDivElement | null>(null);
+
   return (
     <div
       role="tablist"
@@ -94,33 +114,95 @@ function ViewSwitcher({ value, onChange }: { value: ActiveView; onChange: (v: Ac
         background: "var(--paper-soft)",
       }}
     >
-      {items.map((it, i) => {
-        const active = value === it.v;
-        return (
-          <button
-            key={it.v}
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(it.v)}
-            style={{
-              border: "none",
-              borderLeft: i === 0 ? "none" : "1px solid var(--hairline)",
-              padding: "6px 12px",
-              background: active ? "var(--paper-deep)" : "transparent",
-              color: active ? "var(--ink)" : "var(--ink-soft)",
-              fontFamily: "var(--sans)",
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              cursor: "pointer",
-              transition: "background 0.15s",
-            }}
-          >
-            {it.label}
-          </button>
-        );
-      })}
+      <button
+        role="tab"
+        aria-selected={value === "all"}
+        onClick={() => onChange("all")}
+        style={tabBtnStyle(value === "all", false)}
+      >
+        All Issues
+      </button>
+      <div
+        ref={workingOnRef}
+        role="group"
+        style={{
+          display: "inline-flex",
+          alignItems: "stretch",
+          borderLeft: "1px solid var(--hairline)",
+          background: value === "working_on" ? "var(--paper-deep)" : "transparent",
+        }}
+      >
+        <button
+          role="tab"
+          aria-selected={value === "working_on"}
+          onClick={() => onChange("working_on")}
+          title={workingOnLabel ? `Working On · ${workingOnLabel}` : "Working On"}
+          style={{
+            ...tabBtnStyle(value === "working_on", false),
+            background: "transparent",
+            borderLeft: "none",
+            paddingRight: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            maxWidth: 220,
+          }}
+        >
+          <span>Working On</span>
+          {workingOnLabel && (
+            <span
+              style={{
+                fontWeight: 400,
+                opacity: 0.7,
+                textTransform: "none",
+                letterSpacing: 0,
+                fontSize: 10,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: 140,
+              }}
+            >
+              · {workingOnLabel}
+            </span>
+          )}
+        </button>
+        <button
+          aria-label="切换 Working On view"
+          title="切换 / 新建 Working On view"
+          onClick={() => {
+            const el = workingOnRef.current;
+            if (!el || !onWorkingOnExpand) return;
+            const rect = el.getBoundingClientRect();
+            onWorkingOnExpand({ x: rect.left, y: rect.bottom + 4, width: rect.width });
+          }}
+          style={{
+            ...tabBtnStyle(value === "working_on", true),
+            background: "transparent",
+            borderLeft: "1px solid var(--hairline)",
+            padding: "0 8px",
+            fontSize: 9,
+          }}
+        >
+          ▾
+        </button>
+      </div>
     </div>
   );
+}
+
+function tabBtnStyle(active: boolean, dense: boolean): React.CSSProperties {
+  return {
+    border: "none",
+    padding: dense ? "6px 0" : "6px 12px",
+    background: active ? "var(--paper-deep)" : "transparent",
+    color: active ? "var(--ink)" : "var(--ink-soft)",
+    fontFamily: "var(--sans)",
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    cursor: "pointer",
+    transition: "background 0.15s",
+  };
 }

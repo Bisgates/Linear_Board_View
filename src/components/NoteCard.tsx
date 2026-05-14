@@ -93,6 +93,14 @@ function NoteCardImpl({ data, selected }: Props) {
     if (!editing) setText(data.body);
   }, [data.body, editing]);
 
+  // External edit command from CanvasBoard (driven by editingNoteId): Space
+  // on a focused note sets autoEdit → enter edit; mind-map Esc clears it →
+  // exit edit. Local dblclick edits flip `editing` without touching autoEdit,
+  // so this effect only fires on true external transitions.
+  useEffect(() => {
+    setEditing(Boolean(data.autoEdit));
+  }, [data.autoEdit]);
+
   useEffect(() => {
     if (!editing) return;
     const raf = requestAnimationFrame(() => {

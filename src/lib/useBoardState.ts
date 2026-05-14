@@ -24,7 +24,7 @@ const MAX_UNDO = 50;
  * Used by every spatial-board view in the app (Working On, All Issues, etc.) —
  * each view supplies its own endpoint.
  */
-export function useBoardState(endpoint: string, onError?: (e: unknown) => void): UseBoardState {
+export function useBoardState(endpoint: string | null, onError?: (e: unknown) => void): UseBoardState {
   const [data, setDataState] = useState<BoardData>(EMPTY_BOARD);
   const [loaded, setLoaded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -34,12 +34,23 @@ export function useBoardState(endpoint: string, onError?: (e: unknown) => void):
   onErrorRef.current = onError;
 
   useEffect(() => {
+    // Endpoint not ready yet (e.g. manifest still loading). Reset to empty so a
+    // stale view's data doesn't leak across endpoint changes.
+    if (!endpoint) {
+      latestRef.current = EMPTY_BOARD;
+      undoStack.current = [];
+      setDataState(EMPTY_BOARD);
+      setLoaded(false);
+      return;
+    }
     let cancelled = false;
+    setLoaded(false);
     (async () => {
       try {
         const d = await loadBoardData(endpoint);
         if (cancelled) return;
         latestRef.current = d;
+        undoStack.current = [];
         setDataState(d);
         setLoaded(true);
       } catch (e) {
@@ -55,6 +66,7 @@ export function useBoardState(endpoint: string, onError?: (e: unknown) => void):
   }, [endpoint]);
 
   const schedule = useCallback(() => {
+    if (!endpoint) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       const snapshot = latestRef.current;

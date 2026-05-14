@@ -7,8 +7,15 @@ interface ShortcutRow {
 }
 
 const SHORTCUTS: ShortcutRow[] = [
+  { keys: ["↑ ↓ ← →"], scope: "Mindmap", desc: "Move halo to the spatially nearest card in that direction (±45° cone)" },
+  { keys: ["Space"], scope: "Mindmap", desc: "Note → enter inline edit; issue → open DetailPanel" },
+  { keys: ["Esc"], scope: "Mindmap", desc: "Exit note edit (halo stays on the card)" },
+  { keys: ["Tab"], scope: "Mindmap", desc: "Generate a child note to the right; inherits parent color (issue parent → sage default)" },
+  { keys: ["⇧ Tab"], scope: "Mindmap", desc: "Generate a sibling note below under the same parent (root → spawns same-column root, no edge)" },
   { keys: ["X"], scope: "Canvas", desc: "Linking mode: click source → click target (or empty pane → spawns linked note)" },
   { keys: ["C"], scope: "Canvas", desc: "Undo last action (up to 50 steps)" },
+  { keys: ["⌘ C", "Ctrl C"], scope: "Canvas", desc: "Copy current selection (cards + notes + their internal edges) to in-memory buffer" },
+  { keys: ["⌘ V", "Ctrl V"], scope: "Canvas", desc: "Paste buffer into current view, centred on the viewport; duplicate issues are skipped" },
   { keys: ["Esc"], scope: "Global", desc: "Cancel link mode / leave edit / close menus" },
   { keys: ["⌘ Enter", "Ctrl Enter"], scope: "Note edit", desc: "Commit note edit; plain Enter inserts newline" },
   { keys: ["Delete", "Backspace"], scope: "Canvas", desc: "Delete selected node(s) or edge(s)" },

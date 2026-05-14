@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CanvasBoard from "./components/CanvasBoard";
 import { TopBar, type ActiveView } from "./components/TopBar";
+import { WorkingOnDropdown } from "./components/WorkingOnDropdown";
 import { FilterBar } from "./components/FilterBar";
 import { DetailPanel } from "./components/DetailPanel";
 import { IssuePickerPopover } from "./components/IssuePickerPopover";
@@ -9,11 +10,13 @@ import { ToastStack, type ToastItem } from "./components/Toast";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
-import { useAllIssuesBoardState, useWorkingOnState } from "./lib/useBoardState";
+import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
+import { useWorkingOnViews } from "./lib/useWorkingOnViews";
 import { findNextSlot } from "./lib/workingOn";
 import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
+import type { ClipboardPayload } from "./lib/clipboard";
 
 let toastSeq = 0;
 
@@ -27,6 +30,8 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [activeView, setActiveView] = useState<ActiveView>("all");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [dropdownAnchor, setDropdownAnchor] = useState<{ x: number; y: number; width: number } | null>(null);
+  const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -36,7 +41,10 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const workingOn = useWorkingOnState((e) => pushToast("error", `Working-on save failed: ${String(e)}`));
+  const wov = useWorkingOnViews((e) => pushToast("error", `Views save failed: ${String(e)}`));
+  const workingOn = useBoardState(wov.boardEndpoint, (e) =>
+    pushToast("error", `Working-on save failed: ${String(e)}`),
+  );
   const allIssuesBoard = useAllIssuesBoardState((e) =>
     pushToast("error", `All-issues board save failed: ${String(e)}`),
   );
@@ -217,6 +225,27 @@ export default function App() {
   const displayCount = activeView === "all" ? filtered.length : workingOnIds.size;
   const displayTotal = activeView === "all" ? allIssues.length : undefined;
 
+  const activeViewName = useMemo(() => {
+    if (!wov.manifest || !wov.activeId) return undefined;
+    return wov.manifest.views.find((v) => v.id === wov.activeId)?.name;
+  }, [wov.manifest, wov.activeId]);
+
+  const handleCreate = useCallback(async () => {
+    const newId = await wov.createView();
+    if (newId) {
+      setActiveView("working_on");
+      pushToast("success", `已创建 view`);
+    }
+  }, [wov, pushToast]);
+
+  const handlePick = useCallback(
+    (id: string) => {
+      wov.setActiveId(id);
+      setActiveView("working_on");
+    },
+    [wov],
+  );
+
   return (
     <div
       style={{
@@ -235,12 +264,26 @@ export default function App() {
         totalCount={displayTotal}
         activeView={activeView}
         onViewChange={setActiveView}
+        workingOnLabel={activeViewName}
+        onWorkingOnExpand={(a) => setDropdownAnchor(a)}
         leftSlot={
           activeView === "working_on" ? (
             <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
           ) : null
         }
       />
+      {dropdownAnchor && wov.manifest && (
+        <WorkingOnDropdown
+          views={wov.manifest.views}
+          activeId={wov.activeId}
+          onPick={handlePick}
+          onCreate={handleCreate}
+          onRename={wov.renameView}
+          onDelete={wov.deleteView}
+          onClose={() => setDropdownAnchor(null)}
+          anchor={dropdownAnchor}
+        />
+      )}
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {activeView === "all" && (
         <FilterBar filter={filter} options={options} onChange={setFilter} />
@@ -261,6 +304,9 @@ export default function App() {
               loadingLabel="loading all_issues_board…"
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
+              clipboard={clipboard}
+              setClipboard={setClipboard}
+              onClipboardToast={pushToast}
             />
           ) : (
             <CanvasBoard
@@ -269,9 +315,12 @@ export default function App() {
               loaded={workingOn.loaded}
               setData={workingOn.setData}
               undo={workingOn.undo}
-              loadingLabel="loading working_on…"
+              loadingLabel={`loading ${activeViewName ?? "working_on"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
+              clipboard={clipboard}
+              setClipboard={setClipboard}
+              onClipboardToast={pushToast}
             />
           )}
         </div>
