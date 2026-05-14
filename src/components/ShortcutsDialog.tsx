@@ -14,6 +14,7 @@ const SHORTCUTS: ShortcutRow[] = [
   { keys: ["⇧ Tab"], scope: "Mindmap", desc: "Generate a sibling note below under the same parent (root → spawns same-column root, no edge)" },
   { keys: ["X"], scope: "Canvas", desc: "Linking mode: click source → click target (or empty pane → spawns linked note)" },
   { keys: ["C"], scope: "Canvas", desc: "Undo last action (up to 50 steps)" },
+  { keys: ["G"], scope: "Canvas", desc: "Group selected cards for moving together (movement only); press G on a whole group to ungroup" },
   { keys: ["⌘ C", "Ctrl C"], scope: "Canvas", desc: "Copy current selection (cards + notes + their internal edges) to in-memory buffer" },
   { keys: ["⌘ V", "Ctrl V"], scope: "Canvas", desc: "Paste buffer into current view, centred on the viewport; duplicate issues are skipped" },
   { keys: ["Esc"], scope: "Global", desc: "Cancel link mode / leave edit / close menus" },

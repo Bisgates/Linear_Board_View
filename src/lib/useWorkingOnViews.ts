@@ -88,7 +88,7 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
       const meta: ViewMeta = { id, name: finalName, createdAt: new Date().toISOString() };
       // Create empty board first so the GET after activation doesn't 404.
       try {
-        await saveBoardData(viewBoardEndpoint(id), { issueMembers: {}, noteNodes: [], edges: [] });
+        await saveBoardData(viewBoardEndpoint(id), { issueMembers: {}, noteNodes: [], edges: [], groups: [] });
       } catch (e) {
         console.error(`[useWorkingOnViews] create board failed`, e);
         onErrorRef.current?.(e);

@@ -25,7 +25,7 @@ import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { BoardData, BoardEdge } from "../lib/workingOn";
+import type { BoardData, BoardEdge, GroupBox } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, shortId } from "../lib/workingOn";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
@@ -579,9 +579,16 @@ function BoardInner({
   // halo / edit target moves. `selected` and `autoEdit` are baked in by
   // buildNodes so they survive every rebuild — without this, e.g. Cmd+Enter
   // (which clears editingNoteId) would wipe the halo because the rebuild
-  // overwrites the per-node `selected` flag.
+  // overwrites the per-node `selected` flag. Multi-select (box-select / g
+  // group) lives only in `nodes` state, so carry it across the rebuild too —
+  // otherwise toggling a group would wipe its own selection mid-action.
   useEffect(() => {
-    setNodes(buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId));
+    setNodes((current) => {
+      const selectedIds = new Set(current.filter((n) => n.selected).map((n) => n.id));
+      const built = buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId);
+      if (selectedIds.size === 0) return built;
+      return built.map((n) => (selectedIds.has(n.id) ? { ...n, selected: true } : n));
+    });
   }, [displayedIssues, data, initialPositions, editingNoteId, focusedCardId]);
 
   // Rebuild edges from data, preserving the currently-selected edge's
@@ -666,15 +673,90 @@ function BoardInner({
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
+      const groups = dataRef.current.groups;
+
       setNodes((current) => {
+        // Group cohesion — two fans-out, both atomic with this state update so
+        // they survive xyflow's same-tick drag-start snapshot:
+        //
+        //   1. selection cascade: any `select` change on a grouped node
+        //      mirrors to co-members (so the visual halo / box-select stays
+        //      group-atomic).
+        //   2. position cohesion: any `position` change on a grouped node
+        //      synthesises matching changes for every co-member with the
+        //      same dx/dy. This is the load-bearing part — xyflow snapshots
+        //      the "drag set" at pointerdown from its internal store, and a
+        //      cascaded `selected=true` won't reach that store before drag
+        //      start. By emitting position changes ourselves we make the
+        //      whole group move regardless of whether xyflow recognised the
+        //      multi-selection in time.
+        let nodeChanges: NodeChange[] = changes;
+        if (groups.length > 0) {
+          const memberToGroup = new Map<string, GroupBox>();
+          for (const g of groups) for (const id of g.memberIds) memberToGroup.set(id, g);
+          const additions: NodeChange[] = [];
+
+          const handledSelGroups = new Set<string>();
+          for (const c of changes) {
+            if (c.type !== "select") continue;
+            const g = memberToGroup.get(c.id);
+            if (!g || handledSelGroups.has(g.id)) continue;
+            handledSelGroups.add(g.id);
+            for (const mid of g.memberIds) {
+              if (mid === c.id) continue;
+              additions.push({ type: "select", id: mid, selected: c.selected });
+            }
+          }
+
+          const positionChangeIds = new Set<string>();
+          for (const c of changes) if (c.type === "position") positionChangeIds.add(c.id);
+          const handledPosGroups = new Set<string>();
+          for (const c of changes) {
+            if (c.type !== "position" || !c.position) continue;
+            const g = memberToGroup.get(c.id);
+            if (!g || handledPosGroups.has(g.id)) continue;
+            handledPosGroups.add(g.id);
+            const primary = current.find((n) => n.id === c.id);
+            if (!primary) continue;
+            const dx = c.position.x - primary.position.x;
+            const dy = c.position.y - primary.position.y;
+            // For dragging=true events, skip zero-deltas; for dragging=false
+            // (drag-end) we still want to mirror so co-members get a settle
+            // event and their final positions land in data.
+            if (dx === 0 && dy === 0 && c.dragging !== false) continue;
+            for (const mid of g.memberIds) {
+              if (positionChangeIds.has(mid)) continue;
+              const co = current.find((n) => n.id === mid);
+              if (!co) continue;
+              additions.push({
+                type: "position",
+                id: mid,
+                position: { x: co.position.x + dx, y: co.position.y + dy },
+                dragging: c.dragging,
+              });
+            }
+          }
+
+          if (additions.length > 0) nodeChanges = [...changes, ...additions];
+        }
+
         // Snap-to-align (edge + equal-gap): rewrite live drag position changes
         // when within SNAP_THRESHOLD of another node's edge / centre line, or
         // when D could equalise the gap between two stationary cards. Emit
         // matching guides until release.
+        //
+        // Skip snapping during a multi-node drag (group / box-select drag):
+        // xyflow fires one position change per dragged node with the same
+        // delta. Snapping each independently would break the rigid offsets
+        // between members; the user can still drop precisely after release.
+        const liveDragCount = nodeChanges.filter(
+          (c) => c.type === "position" && c.dragging === true,
+        ).length;
+        const allowSnap = liveDragCount === 1;
         let liveGuides: Guide[] | null = null;
         let liveGapGuides: GapGuide[] | null = null;
-        const adjusted = changes.map((c) => {
-          if (c.type === "position" && c.dragging && c.position) {
+        const adjusted = nodeChanges.map((c) => {
+          if (c.type === "position" && c.dragging && c.position && allowSnap) {
             const snap = computeSnap(c.id, c.position, current);
             liveGuides = snap.guides;
             liveGapGuides = snap.gapGuides;
@@ -691,7 +773,7 @@ function BoardInner({
           return c;
         });
 
-        const anyLiveDrag = changes.some(
+        const anyLiveDrag = nodeChanges.some(
           (c) => c.type === "position" && c.dragging === true,
         );
         if (!anyLiveDrag) {
@@ -756,11 +838,15 @@ function BoardInner({
       setData((prev) => {
         const issueMembers = { ...prev.issueMembers };
         for (const id of ids) delete issueMembers[id];
+        const groups = prev.groups
+          .map((g) => ({ ...g, memberIds: g.memberIds.filter((id) => !ids.has(id)) }))
+          .filter((g) => g.memberIds.length >= 2);
         return {
           ...prev,
           issueMembers,
           noteNodes: prev.noteNodes.filter((n) => !ids.has(n.id)),
           edges: prev.edges.filter((e) => !ids.has(e.source) && !ids.has(e.target)),
+          groups,
         };
       });
     },
@@ -938,6 +1024,52 @@ function BoardInner({
         setLinking((prev) => (prev.mode === "off" ? { mode: "source" } : { mode: "off" }));
         return;
       }
+      // g — form or dissolve a movement-only group.
+      //   selection == exactly one existing group's full member set → dissolve
+      //   selection has ≥2 nodes otherwise → form a new group containing them
+      //     (members are pulled out of any prior group; each card max 1 group)
+      if (evt.key === "g" || evt.key === "G") {
+        const selectedIds = reactFlow
+          .getNodes()
+          .filter((n) => n.selected)
+          .map((n) => n.id);
+        if (selectedIds.length < 2) return;
+        evt.preventDefault();
+        const groups = dataRef.current.groups;
+        const selSet = new Set(selectedIds);
+        const matchExisting = groups.find(
+          (g) =>
+            g.memberIds.length === selectedIds.length &&
+            g.memberIds.every((id) => selSet.has(id)),
+        );
+        if (matchExisting) {
+          setData((prev) => ({
+            ...prev,
+            groups: prev.groups.filter((g) => g.id !== matchExisting.id),
+          }));
+          // Also clear the members' selected flag synchronously into nodes
+          // state — otherwise xyflow's internal store still sees them as a
+          // multi-selection and the very next drag would translate them all
+          // together (since xyflow's native multi-drag doesn't consult our
+          // data.groups; it consults its own selection snapshot).
+          const dissolvedIds = new Set(matchExisting.memberIds);
+          setNodes((current) =>
+            current.map((n) => (dissolvedIds.has(n.id) ? { ...n, selected: false } : n)),
+          );
+        } else {
+          const newGroup: GroupBox = { id: shortId("grp"), memberIds: selectedIds };
+          setData((prev) => {
+            const cleaned = prev.groups
+              .map((g) => ({
+                ...g,
+                memberIds: g.memberIds.filter((id) => !selSet.has(id)),
+              }))
+              .filter((g) => g.memberIds.length >= 2);
+            return { ...prev, groups: [...cleaned, newGroup] };
+          });
+        }
+        return;
+      }
       if ((evt.key === "c" || evt.key === "C" || evt.code === "KeyC") && undo) {
         evt.preventDefault();
         const ok = undo();
@@ -1003,7 +1135,7 @@ function BoardInner({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea]);
+  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData]);
 
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier
@@ -1167,6 +1299,112 @@ function BoardInner({
     return () => window.removeEventListener("keydown", onKey);
   }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast]);
 
+  // Drag the entire group by grabbing the dashed frame's empty interior
+  // (frame sits at zIndex -1 so cards still catch clicks on their own area).
+  // We bypass xyflow's drag system here — read start positions straight from
+  // `data` so members that are currently filtered out (e.g. in All Issues
+  // view) still come along; live-translate the visible ones in `nodes`
+  // state during the move; commit the final positions for every member to
+  // `data` on release.
+  const startGroupDrag = useCallback(
+    (evt: React.PointerEvent<HTMLDivElement>, groupId: string) => {
+      if (evt.button !== 0) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      const group = dataRef.current.groups.find((g) => g.id === groupId);
+      if (!group) return;
+      const startFlow = reactFlow.screenToFlowPosition({ x: evt.clientX, y: evt.clientY });
+      const startPositions = new Map<string, { x: number; y: number }>();
+      const d = dataRef.current;
+      for (const id of group.memberIds) {
+        if (d.issueMembers[id]) {
+          startPositions.set(id, { ...d.issueMembers[id] });
+        } else {
+          const note = d.noteNodes.find((n) => n.id === id);
+          if (note) startPositions.set(id, { x: note.x, y: note.y });
+        }
+      }
+      if (startPositions.size === 0) return;
+
+      let lastDx = 0;
+      let lastDy = 0;
+      const onMove = (mev: PointerEvent) => {
+        const cur = reactFlow.screenToFlowPosition({ x: mev.clientX, y: mev.clientY });
+        lastDx = cur.x - startFlow.x;
+        lastDy = cur.y - startFlow.y;
+        setNodes((prev) =>
+          prev.map((n) => {
+            const start = startPositions.get(n.id);
+            if (!start) return n;
+            return { ...n, position: { x: start.x + lastDx, y: start.y + lastDy } };
+          }),
+        );
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (lastDx === 0 && lastDy === 0) return;
+        setData((prev) => {
+          const issueMembers = { ...prev.issueMembers };
+          const noteNodes = [...prev.noteNodes];
+          for (const [id, start] of startPositions) {
+            const finalX = start.x + lastDx;
+            const finalY = start.y + lastDy;
+            if (issueMembers[id]) {
+              issueMembers[id] = { x: finalX, y: finalY };
+            } else {
+              const idx = noteNodes.findIndex((n) => n.id === id);
+              if (idx >= 0) {
+                noteNodes[idx] = { ...noteNodes[idx]!, x: finalX, y: finalY };
+              }
+            }
+          }
+          return { ...prev, issueMembers, noteNodes };
+        });
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [reactFlow, setData],
+  );
+
+  // Bounding rects for each group, computed from live node positions so the
+  // frame tracks every drag in real time. Read from local `nodes` state (not
+  // `data`) because xyflow only writes positions back to data on drag-settle.
+  const groupFrames = useMemo(() => {
+    if (data.groups.length === 0) return [];
+    const byId = new Map<string, Node>();
+    for (const n of nodes) byId.set(n.id, n);
+    const PAD = 10;
+    const out: { id: string; x: number; y: number; w: number; h: number }[] = [];
+    for (const g of data.groups) {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      let count = 0;
+      for (const id of g.memberIds) {
+        const n = byId.get(id);
+        if (!n) continue;
+        const { w, h } = nodeSize(n);
+        minX = Math.min(minX, n.position.x);
+        minY = Math.min(minY, n.position.y);
+        maxX = Math.max(maxX, n.position.x + w);
+        maxY = Math.max(maxY, n.position.y + h);
+        count += 1;
+      }
+      if (count < 2) continue;
+      out.push({
+        id: g.id,
+        x: minX - PAD,
+        y: minY - PAD,
+        w: maxX - minX + PAD * 2,
+        h: maxY - minY + PAD * 2,
+      });
+    }
+    return out;
+  }, [data.groups, nodes]);
+
   // Resolve a friendly label for the source node so the user remembers what they picked.
   const sourceLabel = useMemo(() => {
     if (linking.mode !== "target") return null;
@@ -1282,6 +1520,10 @@ function BoardInner({
     (target: ContextMenuTarget) => {
       setMenu(null);
       setData((prev) => {
+        const pruneGroups = (id: string) =>
+          prev.groups
+            .map((g) => ({ ...g, memberIds: g.memberIds.filter((m) => m !== id) }))
+            .filter((g) => g.memberIds.length >= 2);
         if (target.kind === "issue") {
           const { [target.id]: _drop, ...rest } = prev.issueMembers;
           void _drop;
@@ -1289,6 +1531,7 @@ function BoardInner({
             ...prev,
             issueMembers: rest,
             edges: prev.edges.filter((e) => e.source !== target.id && e.target !== target.id),
+            groups: pruneGroups(target.id),
           };
         }
         if (target.kind === "note") {
@@ -1296,6 +1539,7 @@ function BoardInner({
             ...prev,
             noteNodes: prev.noteNodes.filter((n) => n.id !== target.id),
             edges: prev.edges.filter((e) => e.source !== target.id && e.target !== target.id),
+            groups: pruneGroups(target.id),
           };
         }
         return { ...prev, edges: prev.edges.filter((e) => e.id !== target.id) };
@@ -1380,6 +1624,28 @@ function BoardInner({
       >
         <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
         <ViewportPortal>
+          {groupFrames.map((f) => (
+            <div
+              key={`grp-${f.id}`}
+              onPointerDown={(e) => startGroupDrag(e, f.id)}
+              style={{
+                position: "absolute",
+                left: f.x,
+                top: f.y,
+                width: f.w,
+                height: f.h,
+                border: "1.5px dashed #7a8b66",
+                borderRadius: 10,
+                background: "rgba(122,139,102,0.04)",
+                // Pointer-events on so the empty interior (and the dashed
+                // border) drags the whole group; zIndex -1 keeps cards on top
+                // so clicking a card still hits the card, not the frame.
+                pointerEvents: "auto",
+                cursor: "move",
+                zIndex: -1,
+              }}
+            />
+          ))}
           {snapGuides.map((g, i) => (
             <div
               key={`a${i}`}

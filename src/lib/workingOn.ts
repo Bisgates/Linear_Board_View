@@ -35,6 +35,18 @@ export interface BoardEdge {
 }
 
 /**
+ * A movement-only grouping: when any member is selected, all members get
+ * selected (so xyflow drags them together); other behaviors (edit, edge,
+ * detail panel) stay independent. Each node id can belong to at most one
+ * group — forming a new group with already-grouped members removes them
+ * from their prior group.
+ */
+export interface GroupBox {
+  id: string;
+  memberIds: string[];
+}
+
+/**
  * One canvas board's persisted state: positions for any node id (issue or
  * note), the note nodes themselves, and user-drawn edges (purely visual —
  * not Linear's parent-child links).
@@ -43,12 +55,14 @@ export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
   noteNodes: NoteNode[];
   edges: BoardEdge[];
+  groups: GroupBox[];
 }
 
 export const EMPTY_BOARD: BoardData = {
   issueMembers: {},
   noteNodes: [],
   edges: [],
+  groups: [],
 };
 
 export async function loadBoardData(endpoint: string): Promise<BoardData> {

@@ -14,9 +14,10 @@ export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
   noteNodes: { id: string; body: string; x: number; y: number; color?: string; done?: boolean }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
+  groups: { id: string; memberIds: string[] }[];
 }
 
-const EMPTY: BoardData = { issueMembers: {}, noteNodes: [], edges: [] };
+const EMPTY: BoardData = { issueMembers: {}, noteNodes: [], edges: [], groups: [] };
 
 export const STORE_PATHS = {
   workingOnDir: WORKING_ON_DIR,
@@ -114,7 +115,22 @@ function validate(raw: unknown): BoardData {
     }
   }
 
-  return { issueMembers: members, noteNodes: notes, edges };
+  const groups: BoardData["groups"] = [];
+  if (Array.isArray(obj.groups)) {
+    for (const g of obj.groups) {
+      if (!g || typeof g !== "object") continue;
+      const r = g as Record<string, unknown>;
+      if (typeof r.id !== "string") continue;
+      if (!Array.isArray(r.memberIds)) continue;
+      const memberIds: string[] = [];
+      for (const m of r.memberIds) if (typeof m === "string") memberIds.push(m);
+      // Drop trivial groups: a single-member "group" has nothing to drag together.
+      if (memberIds.length < 2) continue;
+      groups.push({ id: r.id, memberIds });
+    }
+  }
+
+  return { issueMembers: members, noteNodes: notes, edges, groups };
 }
 
 // --- Working On multi-view storage ---
