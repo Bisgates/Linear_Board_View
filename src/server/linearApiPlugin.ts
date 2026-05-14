@@ -70,6 +70,7 @@ export function linearApiPlugin(): Plugin {
               const saved = await writeManifest(body);
               return sendJson(res, 200, { ok: true, data: saved });
             } catch (err) {
+              console.error(`[api] PUT /views failed:`, err);
               return sendJson(res, 500, { ok: false, error: String(err) });
             }
           }

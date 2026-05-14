@@ -119,3 +119,38 @@ export function findNextSlot(taken: { x: number; y: number }[]): { x: number; y:
   }
   return { x: 0, y: 0 };
 }
+
+/**
+ * Like findNextSlot but anchored to a centre point (typically the current
+ * viewport centre in flow coordinates). Spirals outward through grid cells so
+ * fresh cards land inside the user's current view instead of at the board
+ * origin.
+ */
+export function findNextSlotNear(
+  center: { x: number; y: number },
+  taken: { x: number; y: number }[],
+): { x: number; y: number } {
+  const cx = Math.round(center.x / GRID_DX) * GRID_DX;
+  const cy = Math.round(center.y / GRID_DY) * GRID_DY;
+  const isFree = (p: { x: number; y: number }) => {
+    for (const t of taken) {
+      const dx = t.x - p.x;
+      const dy = t.y - p.y;
+      if (dx * dx + dy * dy < MIN_DIST * MIN_DIST) return false;
+    }
+    return true;
+  };
+  // Centre first, then concentric rings of grid cells outward.
+  const start = { x: cx, y: cy };
+  if (isFree(start)) return start;
+  for (let ring = 1; ring < 60; ring += 1) {
+    for (let dy = -ring; dy <= ring; dy += 1) {
+      for (let dx = -ring; dx <= ring; dx += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue; // only the ring edge
+        const p = { x: cx + dx * GRID_DX, y: cy + dy * GRID_DY };
+        if (isFree(p)) return p;
+      }
+    }
+  }
+  return start;
+}

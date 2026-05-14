@@ -27,7 +27,18 @@ export async function saveManifest(m: ViewsManifest): Promise<ViewsManifest> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(m),
   });
-  if (!res.ok) throw new Error(`save manifest failed: ${res.status}`);
+  if (!res.ok) {
+    // Try to surface the server-side error body, not just the status code.
+    let detail = "";
+    try {
+      const text = await res.text();
+      const parsed = JSON.parse(text) as { error?: unknown };
+      detail = typeof parsed.error === "string" ? `: ${parsed.error}` : `: ${text}`;
+    } catch {
+      /* non-json body, ignore */
+    }
+    throw new Error(`save manifest failed: ${res.status}${detail}`);
+  }
   const json = (await res.json()) as { ok: boolean; data?: ViewsManifest; error?: string };
   if (!json.ok || !json.data) throw new Error(json.error ?? "save manifest: bad response");
   return json.data;

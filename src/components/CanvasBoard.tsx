@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -72,6 +72,16 @@ interface CanvasBoardProps {
   setClipboard?: (p: ClipboardPayload | null) => void;
   /** Lightweight toast hook used to surface "N items skipped" notices. */
   onClipboardToast?: (kind: "info" | "success" | "error", msg: string) => void;
+  /** Identifier of the underlying view. When it changes, the board re-fits the
+   * viewport to the new content (so switching Working On views doesn't strand
+   * the user in empty space). */
+  viewKey?: string;
+}
+
+export interface CanvasBoardHandle {
+  /** Current viewport centre in flow coordinates — used by callers (e.g. the
+   * issue picker) that need to drop new cards inside the visible region. */
+  getViewportCenter(): { x: number; y: number } | null;
 }
 
 function buildNodes(
@@ -479,7 +489,9 @@ function BoardInner({
   clipboard,
   setClipboard,
   onClipboardToast,
-}: CanvasBoardProps) {
+  viewKey,
+  forwardedRef,
+}: CanvasBoardProps & { forwardedRef?: React.Ref<CanvasBoardHandle> }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -513,6 +525,43 @@ function BoardInner({
   >({ mode: "off" });
   const reactFlow = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useImperativeHandle(
+    forwardedRef,
+    () => ({
+      getViewportCenter() {
+        const rect = wrapperRef.current?.getBoundingClientRect();
+        if (!rect) return null;
+        return reactFlow.screenToFlowPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+      },
+    }),
+    [reactFlow],
+  );
+
+  // When the underlying view changes (e.g. user picks another Working On view
+  // from the dropdown), refit the viewport so they land on content, not empty
+  // canvas. Wait for `loaded` so we re-fit after the new data swap, not the
+  // tail of the previous view.
+  const lastFitKey = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!loaded) return;
+    if (lastFitKey.current === viewKey) return;
+    lastFitKey.current = viewKey;
+    // Two RAFs: first lets the new nodes paint with their measured sizes,
+    // second lets xyflow internals see them before fitView.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          reactFlow.fitView({ padding: 0.2, duration: 0, includeHiddenNodes: false });
+        } catch {
+          /* fitView can throw if no nodes — ignore */
+        }
+      });
+    });
+  }, [viewKey, loaded, reactFlow]);
   const linkJustFinishedRef = useRef(0);
   const [snapGuides, setSnapGuides] = useState<Guide[]>([]);
   const [gapGuides, setGapGuides] = useState<GapGuide[]>([]);
@@ -1458,10 +1507,15 @@ function BoardInner({
   );
 }
 
-export default function CanvasBoard(props: CanvasBoardProps) {
+const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function CanvasBoard(
+  props,
+  ref,
+) {
   return (
     <ReactFlowProvider>
-      <BoardInner {...props} />
+      <BoardInner {...props} forwardedRef={ref} />
     </ReactFlowProvider>
   );
-}
+});
+
+export default CanvasBoard;

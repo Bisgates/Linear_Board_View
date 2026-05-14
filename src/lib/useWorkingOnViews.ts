@@ -64,18 +64,18 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
 
   const setActiveId = useCallback(
     (id: string) => {
-      setManifest((prev) => {
-        if (!prev || !prev.views.some((v) => v.id === id) || prev.activeId === id) return prev;
-        const next: ViewsManifest = { ...prev, activeId: id };
-        // Fire-and-forget persistence; UI updates immediately from local state.
-        void saveManifest(next).catch((e) => {
-          console.error(`[useWorkingOnViews] setActive save failed`, e);
-          onErrorRef.current?.(e);
-        });
-        return next;
+      // Read current state outside the updater — side effects inside React
+      // setState updaters get double-invoked in StrictMode and are an anti-pattern.
+      const current = manifest;
+      if (!current || !current.views.some((v) => v.id === id) || current.activeId === id) return;
+      const next: ViewsManifest = { ...current, activeId: id };
+      setManifest(next);
+      saveManifest(next).catch((e) => {
+        console.error(`[useWorkingOnViews] setActive save failed`, e);
+        onErrorRef.current?.(e);
       });
     },
-    [],
+    [manifest],
   );
 
   const createView = useCallback(

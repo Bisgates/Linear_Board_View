@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import CanvasBoard from "./components/CanvasBoard";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CanvasBoard, { type CanvasBoardHandle } from "./components/CanvasBoard";
 import { TopBar, type ActiveView } from "./components/TopBar";
 import { WorkingOnDropdown } from "./components/WorkingOnDropdown";
 import { FilterBar } from "./components/FilterBar";
@@ -12,7 +12,7 @@ import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
 import { useWorkingOnViews } from "./lib/useWorkingOnViews";
-import { findNextSlot } from "./lib/workingOn";
+import { findNextSlotNear } from "./lib/workingOn";
 import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
@@ -32,6 +32,8 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dropdownAnchor, setDropdownAnchor] = useState<{ x: number; y: number; width: number } | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
+  const workingOnBoardRef = useRef<CanvasBoardHandle | null>(null);
+  const allIssuesBoardRef = useRef<CanvasBoardHandle | null>(null);
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -210,12 +212,16 @@ export default function App() {
 
   const addToWorkingOn = useCallback(
     (issueId: string) => {
+      // Anchor the placement search at the current viewport centre so the new
+      // card lands inside what the user is looking at. Fall back to (0,0) if
+      // the board hasn't mounted yet.
+      const center = workingOnBoardRef.current?.getViewportCenter() ?? { x: 0, y: 0 };
       workingOn.setData((prev) => {
         if (prev.issueMembers[issueId]) return prev;
         const taken: { x: number; y: number }[] = [];
         for (const p of Object.values(prev.issueMembers)) taken.push(p);
         for (const n of prev.noteNodes) taken.push({ x: n.x, y: n.y });
-        const slot = findNextSlot(taken);
+        const slot = findNextSlotNear(center, taken);
         return { ...prev, issueMembers: { ...prev.issueMembers, [issueId]: slot } };
       });
     },
@@ -246,6 +252,21 @@ export default function App() {
     [wov],
   );
 
+  const handleRenameActive = useCallback(
+    (name: string) => {
+      if (!wov.activeId) return;
+      void wov.renameView(wov.activeId, name);
+    },
+    [wov],
+  );
+
+  // Dropdown lists views newest-first (by createdAt). Manifest order on disk
+  // stays insertion order — we sort only for display.
+  const sortedViews = useMemo(() => {
+    if (!wov.manifest) return [];
+    return [...wov.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [wov.manifest]);
+
   return (
     <div
       style={{
@@ -266,6 +287,7 @@ export default function App() {
         onViewChange={setActiveView}
         workingOnLabel={activeViewName}
         onWorkingOnExpand={(a) => setDropdownAnchor(a)}
+        onRenameActiveWorkingOn={handleRenameActive}
         leftSlot={
           activeView === "working_on" ? (
             <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
@@ -274,7 +296,7 @@ export default function App() {
       />
       {dropdownAnchor && wov.manifest && (
         <WorkingOnDropdown
-          views={wov.manifest.views}
+          views={sortedViews}
           activeId={wov.activeId}
           onPick={handlePick}
           onCreate={handleCreate}
@@ -295,6 +317,8 @@ export default function App() {
           )}
           {activeView === "all" ? (
             <CanvasBoard
+              ref={allIssuesBoardRef}
+              viewKey="all"
               displayedIssues={filtered}
               data={allIssuesBoard.data}
               loaded={allIssuesBoard.loaded}
@@ -310,6 +334,8 @@ export default function App() {
             />
           ) : (
             <CanvasBoard
+              ref={workingOnBoardRef}
+              viewKey={wov.activeId ? `wo-${wov.activeId}` : "wo-loading"}
               displayedIssues={workingOnDisplayed}
               data={workingOn.data}
               loaded={workingOn.loaded}

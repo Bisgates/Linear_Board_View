@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
 export type ActiveView = "all" | "working_on";
@@ -16,6 +16,8 @@ interface TopBarProps {
   workingOnLabel?: string;
   /** Click handler for the ▾ split button. The parent positions the dropdown using the rect handed back. */
   onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
+  /** Double-click on the Working On tab commits a new name for the active view. */
+  onRenameActiveWorkingOn?: (name: string) => void;
   leftSlot?: React.ReactNode;
 }
 
@@ -30,6 +32,7 @@ export function TopBar({
   onViewChange,
   workingOnLabel,
   onWorkingOnExpand,
+  onRenameActiveWorkingOn,
   leftSlot,
 }: TopBarProps) {
   return (
@@ -78,6 +81,7 @@ export function TopBar({
           onChange={onViewChange}
           workingOnLabel={workingOnLabel}
           onWorkingOnExpand={onWorkingOnExpand}
+          onRenameActiveWorkingOn={onRenameActiveWorkingOn}
         />
         <TopBarMenu
           lastSyncAt={lastSyncAt}
@@ -95,13 +99,39 @@ function ViewSwitcher({
   onChange,
   workingOnLabel,
   onWorkingOnExpand,
+  onRenameActiveWorkingOn,
 }: {
   value: ActiveView;
   onChange: (v: ActiveView) => void;
   workingOnLabel?: string;
   onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
+  onRenameActiveWorkingOn?: (name: string) => void;
 }) {
   const workingOnRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commitRename = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== workingOnLabel && onRenameActiveWorkingOn) {
+      onRenameActiveWorkingOn(trimmed);
+    }
+    setEditing(false);
+    setDraft("");
+  };
+
+  const cancelRename = () => {
+    setEditing(false);
+    setDraft("");
+  };
 
   return (
     <div
@@ -135,8 +165,22 @@ function ViewSwitcher({
         <button
           role="tab"
           aria-selected={value === "working_on"}
-          onClick={() => onChange("working_on")}
-          title={workingOnLabel ? `Working On · ${workingOnLabel}` : "Working On"}
+          onClick={() => {
+            if (editing) return;
+            onChange("working_on");
+          }}
+          onDoubleClick={() => {
+            if (!onRenameActiveWorkingOn || !workingOnLabel) return;
+            setDraft(workingOnLabel);
+            setEditing(true);
+          }}
+          title={
+            editing
+              ? "Enter 提交 / Esc 取消"
+              : workingOnLabel
+                ? `Working On · ${workingOnLabel}（双击改名）`
+                : "Working On"
+          }
           style={{
             ...tabBtnStyle(value === "working_on", false),
             background: "transparent",
@@ -145,26 +189,64 @@ function ViewSwitcher({
             display: "flex",
             alignItems: "center",
             gap: 6,
-            maxWidth: 220,
+            maxWidth: 280,
           }}
         >
           <span>Working On</span>
-          {workingOnLabel && (
-            <span
-              style={{
-                fontWeight: 400,
-                opacity: 0.7,
-                textTransform: "none",
-                letterSpacing: 0,
-                fontSize: 10,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: 140,
-              }}
-            >
-              · {workingOnLabel}
+          {editing ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{ opacity: 0.5 }}>·</span>
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitRename();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelRename();
+                  }
+                  e.stopPropagation();
+                }}
+                onBlur={commitRename}
+                style={{
+                  width: 160,
+                  border: "1px solid var(--hairline)",
+                  background: "var(--paper)",
+                  color: "var(--ink)",
+                  padding: "2px 6px",
+                  fontFamily: "var(--sans)",
+                  fontSize: 11,
+                  fontWeight: 400,
+                  textTransform: "none",
+                  letterSpacing: 0,
+                  borderRadius: 3,
+                  outline: "none",
+                }}
+              />
             </span>
+          ) : (
+            workingOnLabel && (
+              <span
+                style={{
+                  fontWeight: 400,
+                  opacity: 0.7,
+                  textTransform: "none",
+                  letterSpacing: 0,
+                  fontSize: 10,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: 200,
+                }}
+              >
+                · {workingOnLabel}
+              </span>
+            )
           )}
         </button>
         <button
