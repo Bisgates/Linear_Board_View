@@ -71,6 +71,11 @@ interface NoteData {
   color?: string;
   done?: boolean;
   autoEdit?: boolean;
+  // When this card is part of a multi-note selection (≥2 notes selected), the
+  // board renders a single shared color palette near the selection bounding
+  // box; individual cards hide their inline palette so it doesn't appear N
+  // times. Editing still shows the inline palette on that one card.
+  multiSelected?: boolean;
   onCommit?: (patch: { body?: string; color?: string; done?: boolean }) => void;
   onEditEnd?: () => void;
 }
@@ -83,8 +88,15 @@ type Props = NodeProps & { data: NoteData };
 
 function NoteCardImpl({ data, selected }: Props) {
   const [editing, setEditing] = useState<boolean>(Boolean(data.autoEdit));
-  const [text, setText] = useState(data.body);
-  const textRef = useRef<HTMLTextAreaElement | null>(null);
+  const splitBody = (b: string): { title: string; rest: string } => {
+    const ls = b.split("\n");
+    return { title: ls[0] ?? "", rest: ls.slice(1).join("\n") };
+  };
+  const initial = splitBody(data.body);
+  const [title, setTitle] = useState(initial.title);
+  const [rest, setRest] = useState(initial.rest);
+  const titleRef = useRef<HTMLInputElement | null>(null);
+  const restRef = useRef<HTMLTextAreaElement | null>(null);
 
   const accent = data.color ?? DEFAULT_NOTE_COLOR;
   const done = Boolean(data.done);
@@ -96,8 +108,14 @@ function NoteCardImpl({ data, selected }: Props) {
     border: `1.5px solid ${color}`,
   };
 
+  // Sync local state from external data.body when not editing (e.g. after a
+  // server-authoritative replace). During editing we hold the user's draft.
   useEffect(() => {
-    if (!editing) setText(data.body);
+    if (!editing) {
+      const s = splitBody(data.body);
+      setTitle(s.title);
+      setRest(s.rest);
+    }
   }, [data.body, editing]);
 
   // External edit command from CanvasBoard (driven by editingNoteId): Space
@@ -108,10 +126,13 @@ function NoteCardImpl({ data, selected }: Props) {
     setEditing(Boolean(data.autoEdit));
   }, [data.autoEdit]);
 
+  // On entering edit: focus end of whichever field has content. Empty notes
+  // → title; notes with body → body (matches the old single-textarea "end of
+  // all content" behavior).
   useEffect(() => {
     if (!editing) return;
     const raf = requestAnimationFrame(() => {
-      const el = textRef.current;
+      const el = rest ? restRef.current : titleRef.current;
       if (!el) return;
       el.focus();
       const len = el.value.length;
@@ -120,20 +141,52 @@ function NoteCardImpl({ data, selected }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [editing]);
 
+  // Autogrow the body textarea so long notes expand the card instead of
+  // scrolling internally. Run whenever content changes or edit mode opens.
+  useEffect(() => {
+    if (!editing) return;
+    const el = restRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [editing, rest]);
+
   const commit = () => {
-    if (text !== data.body) data.onCommit?.({ body: text });
+    const joined = rest ? `${title}\n${rest}` : title;
+    if (joined !== data.body) data.onCommit?.({ body: joined });
     setEditing(false);
     data.onEditEnd?.();
   };
+  // Commit on blur only when focus leaves *both* fields (Tab between them
+  // shouldn't close the editor). Defer to next frame so the new focus target
+  // is already set.
+  const onFieldBlur = () => {
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (a === titleRef.current || a === restRef.current) return;
+      commit();
+    });
+  };
   const cancel = () => {
-    setText(data.body);
+    const s = splitBody(data.body);
+    setTitle(s.title);
+    setRest(s.rest);
     setEditing(false);
     data.onEditEnd?.();
   };
 
-  const lines = data.body.split("\n");
-  const titleLine = lines[0] ?? "";
-  const restText = lines.slice(1).join("\n");
+  const sharedKeys = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      commit();
+    }
+  };
+
+  const titleLine = title;
+  const restText = rest;
 
   return (
     <div
@@ -184,9 +237,53 @@ function NoteCardImpl({ data, selected }: Props) {
           letterSpacing: "0.1em",
           textTransform: "uppercase",
           fontWeight: 600,
+          gap: 8,
         }}
       >
         <span>Note</span>
+        {(editing || (selected && !data.multiSelected)) && (
+          <div
+            className="nodrag nopan"
+            style={{
+              display: "flex",
+              gap: 4,
+              alignItems: "center",
+              flex: 1,
+              justifyContent: "flex-end",
+              marginRight: 4,
+            }}
+          >
+            {NOTE_COLORS.map((c) => {
+              const active = c === color;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  aria-label={`color ${c}`}
+                  className="nodrag nopan"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (c !== color) data.onCommit?.({ color: c });
+                  }}
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 3,
+                    background: c,
+                    border: active ? "1.5px solid var(--ink)" : "1px solid rgba(26,24,20,0.15)",
+                    cursor: "pointer",
+                    padding: 0,
+                    transition: "transform 0.1s",
+                  }}
+                />
+              );
+            })}
+          </div>
+        )}
         <button
           type="button"
           role="checkbox"
@@ -240,84 +337,71 @@ function NoteCardImpl({ data, selected }: Props) {
         </button>
       </div>
 
-      {editing && (
-        <div
-          className="nodrag nopan"
-          style={{
-            display: "flex",
-            gap: 6,
-            marginBottom: 8,
-            alignItems: "center",
-          }}
-        >
-          {NOTE_COLORS.map((c) => {
-            const active = c === color;
-            return (
-              <button
-                key={c}
-                type="button"
-                aria-label={`color ${c}`}
-                className="nodrag nopan"
-                onMouseDown={(e) => {
-                  // Keep textarea focused; also stop xyflow's drag start.
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (c !== color) data.onCommit?.({ color: c });
-                }}
-                style={{
-                  width: 16,
-                  height: 16,
-                  borderRadius: "50%",
-                  background: c,
-                  border: active ? `2px solid var(--ink)` : "1px solid rgba(26,24,20,0.15)",
-                  cursor: "pointer",
-                  padding: 0,
-                  boxShadow: active ? "0 0 0 2px var(--paper-soft)" : "none",
-                  transition: "transform 0.1s, box-shadow 0.1s",
-                }}
-              />
-            );
-          })}
-        </div>
-      )}
-
       {editing ? (
-        <textarea
-          ref={textRef}
-          value={text}
-          autoFocus
-          data-note-textarea={data.id}
-          placeholder="first line is the title…"
-          rows={4}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              cancel();
-            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              commit();
-            }
-          }}
-          onBlur={commit}
-          style={{
-            width: "100%",
-            resize: "vertical",
-            minHeight: 64,
-            border: "1px solid var(--hairline)",
-            background: "var(--paper)",
-            padding: "6px 8px",
-            fontFamily: "var(--sans)",
-            fontSize: 13,
-            lineHeight: 1.4,
-            color: "var(--ink)",
-            borderRadius: 4,
-            outline: "none",
-          }}
-        />
+        <>
+          <input
+            ref={titleRef}
+            value={title}
+            data-note-textarea={rest ? undefined : data.id}
+            placeholder="first line is the title…"
+            className="nodrag nopan"
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+                // Move focus to body textarea — matches old "newline goes to
+                // the next line of the body" behavior in the single-textarea
+                // version.
+                e.preventDefault();
+                const el = restRef.current;
+                if (el) {
+                  el.focus();
+                  el.setSelectionRange(0, 0);
+                }
+              } else {
+                sharedKeys(e);
+              }
+            }}
+            onBlur={onFieldBlur}
+            style={{
+              width: "100%",
+              border: "none",
+              background: "transparent",
+              padding: 0,
+              fontFamily: "var(--sans)",
+              fontSize: 14,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              color: "var(--ink)",
+              outline: "none",
+              display: "block",
+              marginBottom: rest ? 6 : 0,
+            }}
+          />
+          <textarea
+            ref={restRef}
+            value={rest}
+            data-note-textarea={rest ? data.id : undefined}
+            rows={1}
+            className="nodrag nopan"
+            onChange={(e) => setRest(e.target.value)}
+            onKeyDown={sharedKeys}
+            onBlur={onFieldBlur}
+            style={{
+              width: "100%",
+              resize: "none",
+              border: "none",
+              background: "transparent",
+              padding: 0,
+              fontFamily: "var(--sans)",
+              fontSize: 12,
+              lineHeight: 1.4,
+              color: "var(--ink-soft)",
+              outline: "none",
+              display: "block",
+              overflow: "hidden",
+            }}
+          />
+        </>
       ) : (
         <>
           <div

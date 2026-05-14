@@ -8,6 +8,7 @@ import {
   ConnectionMode,
   MarkerType,
   ViewportPortal,
+  useStore,
   applyEdgeChanges,
   applyNodeChanges,
   type Edge,
@@ -26,7 +27,7 @@ import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { BoardData, BoardEdge, GroupBox } from "../lib/workingOn";
-import { DEFAULT_NOTE_COLOR, shortId } from "../lib/workingOn";
+import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
   DEFAULT_LAYOUT_CONFIG,
@@ -477,6 +478,96 @@ function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
   }));
 }
 
+// Shared color palette that floats above the bounding box of a multi-note
+// selection. Only renders when ≥2 note nodes are selected. Lives inside
+// `<ReactFlow>` so it sits in the same coordinate origin as the renderer:
+// flow→screen via the live store transform keeps the palette at constant
+// pixel size regardless of zoom, but pinned to the moving bbox in flow space.
+function MultiNoteSelectionPalette({
+  activeColor,
+  onApply,
+}: {
+  activeColor: string | null;
+  onApply: (ids: string[], color: string) => void;
+}) {
+  const transform = useStore((s) => s.transform);
+  const allNodes = useStore((s) => s.nodes);
+
+  const sel = useMemo(
+    () => allNodes.filter((n) => n.type === "note" && n.selected),
+    [allNodes],
+  );
+
+  if (sel.length < 2) return null;
+
+  let maxRight = -Infinity;
+  let minTop = Infinity;
+  for (const n of sel) {
+    const measured = (n as { measured?: { width?: number } }).measured;
+    const w = (measured?.width ?? (n as { width?: number }).width ?? 280) as number;
+    if (n.position.x + w > maxRight) maxRight = n.position.x + w;
+    if (n.position.y < minTop) minTop = n.position.y;
+  }
+
+  const [tx, ty, zoom] = transform;
+  const screenX = maxRight * zoom + tx;
+  const screenY = minTop * zoom + ty;
+  const ids = sel.map((n) => n.id);
+
+  return (
+    <div
+      className="nodrag nopan"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        left: screenX,
+        top: screenY,
+        // Anchor the palette's bottom-right corner just above-right of the
+        // bbox top-right corner so it floats clearly outside the selection.
+        transform: "translate(-100%, calc(-100% - 8px))",
+        display: "flex",
+        gap: 4,
+        padding: "5px 7px",
+        background: "var(--paper)",
+        border: "1px solid var(--hairline)",
+        borderRadius: 6,
+        boxShadow: "0 2px 8px rgba(26,24,20,0.12)",
+        zIndex: 50,
+      }}
+    >
+      {NOTE_COLORS.map((c) => {
+        const active = c === activeColor;
+        return (
+          <button
+            key={c}
+            type="button"
+            aria-label={`color ${c}`}
+            className="nodrag nopan"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onApply(ids, c);
+            }}
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 3,
+              background: c,
+              border: active ? "1.5px solid var(--ink)" : "1px solid rgba(26,24,20,0.15)",
+              cursor: "pointer",
+              padding: 0,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function BoardInner({
   displayedIssues,
   data,
@@ -626,6 +717,21 @@ function BoardInner({
     [setData],
   );
 
+  // Batch color update for all currently-selected notes — driven by the
+  // shared palette that floats above a multi-note selection.
+  const commitNotesColor = useCallback(
+    (ids: string[], color: string) => {
+      const idSet = new Set(ids);
+      setData((prev) => ({
+        ...prev,
+        noteNodes: prev.noteNodes.map((n) =>
+          idSet.has(n.id) ? { ...n, color } : n,
+        ),
+      }));
+    },
+    [setData],
+  );
+
   const commitEdgeLabel = useCallback(
     (id: string, label: string) => {
       setData((prev) => ({
@@ -646,12 +752,21 @@ function BoardInner({
 
   // Augment note nodes with edit handlers (passed via data; functions are stable enough per render).
   const decoratedNodes = useMemo(() => {
+    // Count selected note nodes so each one knows whether it's part of a
+    // multi-select (in which case the inline per-card palette hides and the
+    // board renders a single shared one).
+    const selectedNoteCount = nodes.reduce(
+      (acc, n) => (n.type === "note" && n.selected ? acc + 1 : acc),
+      0,
+    );
+    const multi = selectedNoteCount >= 2;
     return nodes.map((n) => {
       if (n.type !== "note") return n;
       return {
         ...n,
         data: {
           ...n.data,
+          multiSelected: multi && Boolean(n.selected),
           onCommit: (patch: { body?: string; color?: string; done?: boolean }) =>
             commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
@@ -919,8 +1034,8 @@ function BoardInner({
   const focusNoteTextarea = useCallback((id: string) => {
     const grab = () => {
       const el = document.querySelector(
-        `textarea[data-note-textarea="${id}"]`,
-      ) as HTMLTextAreaElement | null;
+        `[data-note-textarea="${id}"]`,
+      ) as HTMLInputElement | HTMLTextAreaElement | null;
       if (el && document.activeElement !== el) {
         el.focus();
         const len = el.value.length;
@@ -1757,6 +1872,10 @@ function BoardInner({
             ),
           )}
         </ViewportPortal>
+        <MultiNoteSelectionPalette
+          activeColor={null}
+          onApply={commitNotesColor}
+        />
         <Controls position="bottom-right" showInteractive={false} />
         <MiniMap
           position="bottom-left"
