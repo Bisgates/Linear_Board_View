@@ -826,6 +826,28 @@ function BoardInner({
     }));
   }, [reactFlow]);
 
+  // Imperatively focus a note's textarea by id — wins races with ReactFlow's
+  // pane focus refresh and StrictMode mount/cleanup. Used by every code path
+  // that flips `editingNoteId` so a textarea is about to appear (Tab, Space,
+  // dblclick pane, linking-mode pane click).
+  const focusNoteTextarea = useCallback((id: string) => {
+    const grab = () => {
+      const el = document.querySelector(
+        `textarea[data-note-textarea="${id}"]`,
+      ) as HTMLTextAreaElement | null;
+      if (el && document.activeElement !== el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    };
+    requestAnimationFrame(() => {
+      grab();
+      setTimeout(grab, 30);
+      setTimeout(grab, 100);
+    });
+  }, []);
+
   // Apply the layout helpers' `shifts` array to issueMembers + noteNodes,
   // append the new note + (optional) edge, and emit one combined setData.
   // Used by both Tab (child) and Shift+Tab (sibling).
@@ -863,8 +885,9 @@ function BoardInner({
       });
       setFocusedCardId(newId);
       setEditingNoteId(newId);
+      focusNoteTextarea(newId);
     },
-    [setData],
+    [setData, focusNoteTextarea],
   );
 
   // Global hotkeys (board-scope, work whenever no text input is focused):
@@ -947,6 +970,7 @@ function BoardInner({
         evt.preventDefault();
         if (isNote) {
           setEditingNoteId(focusId);
+          focusNoteTextarea(focusId);
         } else {
           // Issue → fall back to DetailPanel as the editor.
           onSelectIssue?.(focusId);
@@ -979,7 +1003,7 @@ function BoardInner({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue]);
+  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea]);
 
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier
@@ -1159,26 +1183,6 @@ function BoardInner({
     return id;
   }, [linking, issuesById, data.noteNodes]);
 
-  // Imperatively focus a freshly-created note's textarea — wins races with
-  // ReactFlow's pane focus refresh and StrictMode mount/cleanup.
-  const focusNewNote = useCallback((id: string) => {
-    const grab = () => {
-      const el = document.querySelector(
-        `textarea[data-note-textarea="${id}"]`,
-      ) as HTMLTextAreaElement | null;
-      if (el && document.activeElement !== el) {
-        el.focus();
-        const len = el.value.length;
-        el.setSelectionRange(len, len);
-      }
-    };
-    requestAnimationFrame(() => {
-      grab();
-      setTimeout(grab, 30);
-      setTimeout(grab, 100);
-    });
-  }, []);
-
   const onPaneClick = useCallback(
     (evt: React.MouseEvent) => {
       setMenu(null);
@@ -1201,13 +1205,13 @@ function BoardInner({
         setFocusedCardId(noteId);
         setLinking({ mode: "off" });
         linkJustFinishedRef.current = Date.now();
-        focusNewNote(noteId);
+        focusNoteTextarea(noteId);
         return;
       }
       setFocusedCardId(null);
       onSelectIssue?.(null);
     },
-    [linking, reactFlow, setData, focusNewNote, onSelectIssue],
+    [linking, reactFlow, setData, focusNoteTextarea, onSelectIssue],
   );
 
   // Double-click on the empty pane creates a new note. We attach this at the
@@ -1236,9 +1240,9 @@ function BoardInner({
       }));
       setEditingNoteId(id);
       setFocusedCardId(id);
-      focusNewNote(id);
+      focusNoteTextarea(id);
     },
-    [reactFlow, setData, focusNewNote],
+    [reactFlow, setData, focusNoteTextarea],
   );
 
   const localCoords = useCallback((evt: { clientX: number; clientY: number }) => {
