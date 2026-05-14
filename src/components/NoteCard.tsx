@@ -273,25 +273,26 @@ function NoteCardImpl({ data, selected }: Props) {
             height: 15,
             borderRadius: 4,
             // Three states: todo = hairline empty paper (stamped-in look);
-            // working = filled WORKING_COLOR with a centered white bar
-            // (Things 3 "in-progress" affordance); done = filled with the
-            // frame color and a bold tilted check.
-            border:
-              status === "todo"
-                ? "1px solid rgba(26,24,20,0.22)"
-                : status === "working"
-                  ? `1px solid ${WORKING_COLOR}`
-                  : `1px solid ${color}`,
-            background:
-              status === "todo"
-                ? "var(--paper)"
-                : status === "working"
-                  ? WORKING_COLOR
-                  : color,
-            boxShadow:
-              status === "todo"
-                ? "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)"
-                : "0 1px 0 rgba(26,24,20,0.06)",
+            // working = blue-outlined frame with a strong inward halo (the
+            // empty box "glows" from inside — Things 3-adjacent affordance
+            // for an in-progress task); done = filled with the frame color
+            // and a bold tilted check.
+            ...(status === "todo" && {
+              border: "1px solid rgba(26,24,20,0.22)",
+              background: "var(--paper)",
+              boxShadow:
+                "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)",
+            }),
+            ...(status === "working" && {
+              border: `1.5px solid ${WORKING_COLOR}`,
+              background: "var(--paper)",
+              boxShadow: `inset 0 0 6px 2px ${WORKING_COLOR}99`,
+            }),
+            ...(status === "done" && {
+              border: `1px solid ${color}`,
+              background: color,
+              boxShadow: "0 1px 0 rgba(26,24,20,0.06)",
+            }),
             cursor: "pointer",
             padding: 0,
             display: "flex",
@@ -300,17 +301,6 @@ function NoteCardImpl({ data, selected }: Props) {
             transition: "background 0.14s, border-color 0.14s, box-shadow 0.14s",
           }}
         >
-          {status === "working" && (
-            <span
-              style={{
-                display: "block",
-                width: 7,
-                height: 2,
-                borderRadius: 1,
-                background: "var(--paper)",
-              }}
-            />
-          )}
           {status === "done" && (
             <svg
               width={11}
