@@ -112,6 +112,7 @@ function buildNodes(
         id: note.id,
         body: note.body,
         color: note.color,
+        done: note.done ?? false,
         autoEdit: note.id === editingNoteId,
       } as unknown as Record<string, unknown>,
       draggable: true,
@@ -609,7 +610,7 @@ function BoardInner({
   }, [selectedIssueId]);
 
   const commitNote = useCallback(
-    (id: string, patch: { body?: string; color?: string }) => {
+    (id: string, patch: { body?: string; color?: string; done?: boolean }) => {
       setData((prev) => ({
         ...prev,
         noteNodes: prev.noteNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
@@ -644,7 +645,8 @@ function BoardInner({
         ...n,
         data: {
           ...n.data,
-          onCommit: (patch: { body?: string; color?: string }) => commitNote(n.id, patch),
+          onCommit: (patch: { body?: string; color?: string; done?: boolean }) =>
+            commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
         } as unknown as Record<string, unknown>,
       };
@@ -1021,7 +1023,7 @@ function BoardInner({
           } else if (n.type === "note") {
             const note = dataRef.current.noteNodes.find((nn) => nn.id === n.id);
             if (!note) continue;
-            items.push({ kind: "note", body: note.body, color: note.color, dx, dy });
+            items.push({ kind: "note", body: note.body, color: note.color, done: note.done, dx, dy });
           } else {
             continue;
           }
@@ -1094,13 +1096,14 @@ function BoardInner({
               id = shortId("n");
               localIdxToNewId[idx] = id;
             }
-            const note: { id: string; body: string; x: number; y: number; color?: string } = {
+            const note: { id: string; body: string; x: number; y: number; color?: string; done?: boolean } = {
               id,
               body: it.body,
               x,
               y,
             };
             if (it.color) note.color = it.color;
+            if (it.done) note.done = true;
             noteNodes.push(note);
             existingNoteIds.add(id);
             addedNodeIds.add(id);

@@ -69,10 +69,15 @@ interface NoteData {
   id: string;
   body: string;
   color?: string;
+  done?: boolean;
   autoEdit?: boolean;
-  onCommit?: (patch: { body?: string; color?: string }) => void;
+  onCommit?: (patch: { body?: string; color?: string; done?: boolean }) => void;
   onEditEnd?: () => void;
 }
+
+// When a note is marked done, swap the saturated accent for a muted gray so the
+// card visibly recedes on the board (Apple Reminders / Things style).
+const DONE_FRAME_COLOR = "#a8a39a";
 
 type Props = NodeProps & { data: NoteData };
 
@@ -81,7 +86,9 @@ function NoteCardImpl({ data, selected }: Props) {
   const [text, setText] = useState(data.body);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const color = data.color ?? DEFAULT_NOTE_COLOR;
+  const accent = data.color ?? DEFAULT_NOTE_COLOR;
+  const done = Boolean(data.done);
+  const color = done ? DONE_FRAME_COLOR : accent;
   const handleStyle: React.CSSProperties = {
     width: 10,
     height: 10,
@@ -159,7 +166,7 @@ function NoteCardImpl({ data, selected }: Props) {
 
       <div
         style={{
-          background: "var(--paper-soft)",
+          background: done ? "var(--paper-deep)" : "var(--paper-soft)",
           // Concentric radii: outer 10 − left offset 6 = 4 for left corners;
           // outer 10 − top/right/bottom offset 2 = 8 for the others.
           borderRadius: "4px 8px 8px 4px",
@@ -180,7 +187,57 @@ function NoteCardImpl({ data, selected }: Props) {
         }}
       >
         <span>Note</span>
-        <span style={{ fontFamily: "var(--mono)", color: "var(--muted)" }}>local</span>
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={done}
+          aria-label={done ? "mark as todo" : "mark as done"}
+          className="nodrag nopan"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            data.onCommit?.({ done: !done });
+          }}
+          style={{
+            width: 15,
+            height: 15,
+            borderRadius: 4,
+            // Things 3 — when empty, a hairline rounded square with a soft
+            // inset shadow gives the "stamped into paper" feel; when checked,
+            // the frame fills with the done accent and shows a bold,
+            // slightly-tilted diagonal check.
+            border: done ? `1px solid ${color}` : "1px solid rgba(26,24,20,0.22)",
+            background: done ? color : "var(--paper)",
+            boxShadow: done
+              ? "0 1px 0 rgba(26,24,20,0.06)"
+              : "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)",
+            cursor: "pointer",
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "background 0.14s, border-color 0.14s, box-shadow 0.14s",
+          }}
+        >
+          {done && (
+            <svg
+              width={11}
+              height={11}
+              viewBox="0 0 10 10"
+              fill="none"
+              stroke="var(--paper)"
+              strokeWidth={2.2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ transform: "rotate(-6deg)" }}
+            >
+              <polyline points="1.5,5.2 4,7.5 8.5,2.4" />
+            </svg>
+          )}
+        </button>
       </div>
 
       {editing && (
@@ -269,10 +326,13 @@ function NoteCardImpl({ data, selected }: Props) {
               fontWeight: 600,
               lineHeight: 1.3,
               marginBottom: restText ? 6 : 0,
-              color: titleLine ? "var(--ink)" : "var(--muted)",
+              color: done ? "var(--muted)" : titleLine ? "var(--ink)" : "var(--muted)",
               fontStyle: titleLine ? "normal" : "italic",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
+              textDecoration: done ? "line-through" : "none",
+              textDecorationColor: done ? "var(--muted)" : undefined,
+              textDecorationThickness: done ? "1.5px" : undefined,
             }}
           >
             {titleLine ? renderTokens(titleLine, color) : "untitled (double-click to edit)"}
@@ -281,10 +341,12 @@ function NoteCardImpl({ data, selected }: Props) {
             <div
               style={{
                 fontSize: 12,
-                color: "var(--ink-soft)",
+                color: done ? "var(--muted)" : "var(--ink-soft)",
                 lineHeight: 1.4,
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
+                textDecoration: done ? "line-through" : "none",
+                textDecorationColor: done ? "var(--muted)" : undefined,
               }}
             >
               {renderTokens(restText, color)}

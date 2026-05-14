@@ -4,6 +4,7 @@ export interface NoteNode {
   x: number;
   y: number;
   color?: string;
+  done?: boolean;
 }
 
 /**
