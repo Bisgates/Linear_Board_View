@@ -2,6 +2,10 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.24.0 — Grok 文档：VEGA-3D 研究仓库全面解析
+  - 新增 `grok/VEGA-3D.md`：Video Extracted Generative Awareness for 3D Scene Understanding
+  - 涵盖架构概览、generative encoder 集成（WAN/SD/SVD/VGGT 等）、token-level adaptive gated fusion 算法、训练/评估脚本、数据组织、依赖与快速上手
+
 - v0.23.0 — Agent_tmp tab: board 内启动 / 监控 / 对话 OPUS team agent
   - 新 tab `Agent_tmp`：自动列 OPUS team open issue，每张卡换成 `AgentIssueCard`（▶ 启动 / 状态徽章 / comment thread / 输入框；输入含 `merge` 关键字自动归 `[user:merge]`，否则 `[user:reply]`）
   - PTY agent runtime：dev plugin 起 long-lived `claude --dangerously-skip-permissions`（OAuth, 非 `-p`）per session，跑在独立 worktree；bracketed-paste 喂初始 prompt + 500ms 间隔单发 Enter 提交
