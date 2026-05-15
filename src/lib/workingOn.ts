@@ -23,6 +23,12 @@ export interface NoteNode {
   // image. Length is always `images.length + 1`. `body` is kept as the joined
   // value for back-compat with code that just needs flattened text.
   textSegments?: string[];
+  // Wiki-style cross-reference id. Format `YYMMDDxx` (date + 2 random
+  // letters); see `lib/cardId.ts`. Stable across renames / drags so other
+  // notes can reference this one with `[[YYMMDDxx]]` and the link survives
+  // any internal id churn. Optional only because legacy notes pre-date the
+  // field — App boot fills it in via a one-shot migration.
+  cardId?: string;
 }
 
 /**

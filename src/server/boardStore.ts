@@ -29,6 +29,8 @@ export interface BoardData {
     done?: boolean;
     images?: NoteImage[];
     textSegments?: string[];
+    // Wiki-style cross-reference id, format `YYMMDDxx`. See `lib/cardId.ts`.
+    cardId?: string;
   }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
   groups: { id: string; memberIds: string[] }[];
@@ -145,6 +147,13 @@ function validate(raw: unknown): BoardData {
             segs.push(s);
           }
           if (allStrings) note.textSegments = segs;
+        }
+        // cardId — wiki-style cross-reference id (`YYMMDDxx`). The strict
+        // shape mirrors `lib/cardId.ts` so a malformed value can't sneak in
+        // through the persistence layer; missing values get filled by the
+        // client-side migration on first load.
+        if (typeof r.cardId === "string" && /^[0-9]{6}[a-z]{2}$/.test(r.cardId)) {
+          note.cardId = r.cardId;
         }
         notes.push(note);
       }

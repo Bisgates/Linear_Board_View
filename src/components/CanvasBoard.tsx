@@ -24,7 +24,7 @@ import type { IssueRecord } from "../linear/types";
 import { IssueCard } from "./IssueCard";
 import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
-import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
+import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { BoardData, BoardEdge, GroupBox, NoteImage } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
@@ -72,7 +72,8 @@ interface CanvasBoardProps {
   /** App-level clipboard buffer (shared across boards). When provided, ⌘C/⌘V are enabled. */
   clipboard?: ClipboardPayload | null;
   setClipboard?: (p: ClipboardPayload | null) => void;
-  /** Lightweight toast hook used to surface "N items skipped" notices. */
+  /** Lightweight toast hook used to surface "N items skipped" notices and the
+   *  cardId copy confirmation. Reused for any board-internal toast. */
   onClipboardToast?: (kind: "info" | "success" | "error", msg: string) => void;
   /** Identifier of the underlying view. When it changes, the board re-fits the
    * viewport to the new content (so switching Working On views doesn't strand
@@ -119,6 +120,7 @@ function buildNodes(
         autoEdit: note.id === editingNoteId,
         images: note.images,
         textSegments: note.textSegments,
+        cardId: note.cardId,
       } as unknown as Record<string, unknown>,
       draggable: true,
       selected: note.id === focusedCardId,
@@ -594,7 +596,7 @@ function BoardInner({
   forwardedRef,
 }: CanvasBoardProps & { forwardedRef?: React.Ref<CanvasBoardHandle> }) {
   const [nodes, setNodes] = useState<Node[]>([]);
-  const [menu, setMenu] = useState<{ x: number; y: number; target: ContextMenuTarget } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
   // Board-level keyboard focus — the card that arrow keys / Space / Tab /
@@ -768,6 +770,74 @@ function BoardInner({
     setEditingNoteId(null);
   }, []);
 
+  // Wiki-link lookup: cardId → xyflow node id, computed from the current
+  // board snapshot. Wrapped in useMemo so a reference comparison in the
+  // decoratedNodes useMemo below is enough — this only changes when the set
+  // of cardIds on the board changes (typical: a fresh note added or one
+  // deleted), not on every drag tick.
+  const cardIdToNodeId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const note of data.noteNodes) {
+      if (note.cardId) m.set(note.cardId, note.id);
+    }
+    return m;
+  }, [data.noteNodes]);
+
+  // Stable resolver — declared as a useCallback so the inner reference is
+  // only invalidated when the lookup map itself changes.
+  const resolveCardLink = useCallback(
+    (cardId: string): string | null => cardIdToNodeId.get(cardId) ?? null,
+    [cardIdToNodeId],
+  );
+
+  // Click-to-jump: pan to the destination card while preserving the user's
+  // current zoom — `fitView` was too aggressive (always re-zoomed to fill the
+  // viewport, even for short hops). Now we read the live viewport zoom and
+  // call `setCenter` with that same zoom, so the camera just pans 400ms to
+  // the target's geometric center.
+  //
+  // Also installs the focus halo + selectedId so the destination card glows
+  // and keyboard nav picks up from there. Issue cards open the DetailPanel
+  // via `onSelectIssue`; notes just take the halo.
+  const jumpToNode = useCallback(
+    (nodeId: string) => {
+      const node = reactFlow.getNode(nodeId);
+      if (!node) return;
+      const measured = (node as { measured?: { width?: number; height?: number } }).measured;
+      const w = measured?.width ?? node.width ?? DEFAULT_CARD_W;
+      const h = measured?.height ?? node.height ?? DEFAULT_CARD_H;
+      const cx = node.position.x + w / 2;
+      const cy = node.position.y + h / 2;
+      const { zoom } = reactFlow.getViewport();
+      setFocusedCardId(nodeId);
+      if (node.type === "issue") onSelectIssue?.(nodeId);
+      try {
+        reactFlow.setCenter(cx, cy, { zoom, duration: 400 });
+      } catch {
+        /* setCenter can throw with a stale viewport; ignore */
+      }
+    },
+    [reactFlow, onSelectIssue],
+  );
+
+  // Right-click on a note → copy its `cardId` to the system clipboard +
+  // surface a non-blocking toast so the user knows the copy went through.
+  const copyCardId = useCallback(
+    (cardId: string) => {
+      const write = async () => {
+        try {
+          await navigator.clipboard.writeText(`[[${cardId}]]`);
+          onClipboardToast?.("success", `已复制 [[${cardId}]]`);
+        } catch (err) {
+          console.error("[card-id copy] clipboard write failed", err);
+          onClipboardToast?.("error", `复制失败: ${String(err)}`);
+        }
+      };
+      void write();
+    },
+    [onClipboardToast],
+  );
+
   // Augment note nodes with edit handlers (passed via data; functions are stable enough per render).
   const decoratedNodes = useMemo(() => {
     return nodes.map((n) => {
@@ -785,10 +855,12 @@ function BoardInner({
             textSegments?: string[];
           }) => commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
+          resolveCardLink,
+          onJumpToCardNode: jumpToNode,
         } as unknown as Record<string, unknown>,
       };
     });
-  }, [nodes, commitNote, noteEditingFinished]);
+  }, [nodes, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
 
   const decoratedEdges = useMemo(() => {
     return edges.map((e) => ({
@@ -1736,63 +1808,110 @@ function BoardInner({
       : { x: evt.clientX, y: evt.clientY };
   }, []);
 
+  // --- destructive helpers used by the per-target menu builders below ---
+  const removeIssueFromBoard = useCallback(
+    (id: string) => {
+      setData((prev) => {
+        const pruneGroups = prev.groups
+          .map((g) => ({ ...g, memberIds: g.memberIds.filter((m) => m !== id) }))
+          .filter((g) => g.memberIds.length >= 2);
+        const { [id]: _drop, ...rest } = prev.issueMembers;
+        void _drop;
+        return {
+          ...prev,
+          issueMembers: rest,
+          edges: prev.edges.filter((e) => e.source !== id && e.target !== id),
+          groups: pruneGroups,
+        };
+      });
+    },
+    [setData],
+  );
+
+  const deleteNote = useCallback(
+    (id: string) => {
+      setData((prev) => {
+        const pruneGroups = prev.groups
+          .map((g) => ({ ...g, memberIds: g.memberIds.filter((m) => m !== id) }))
+          .filter((g) => g.memberIds.length >= 2);
+        return {
+          ...prev,
+          noteNodes: prev.noteNodes.filter((n) => n.id !== id),
+          edges: prev.edges.filter((e) => e.source !== id && e.target !== id),
+          groups: pruneGroups,
+        };
+      });
+    },
+    [setData],
+  );
+
+  const deleteEdge = useCallback(
+    (id: string) => {
+      setData((prev) => ({ ...prev, edges: prev.edges.filter((e) => e.id !== id) }));
+    },
+    [setData],
+  );
+
+  // Each contextMenu handler builds its own item list — adding new rows for a
+  // given target type just means appending here. No central dispatcher needed.
   const onNodeContextMenu = useCallback(
     (evt: React.MouseEvent, node: Node) => {
       evt.preventDefault();
-      const target: ContextMenuTarget =
-        node.type === "issue"
-          ? { kind: "issue", id: node.id }
-          : { kind: "note", id: node.id };
       const { x, y } = localCoords(evt);
-      setMenu({ x, y, target });
+      const items: MenuItem[] = [];
+      if (node.type === "note") {
+        const note = dataRef.current.noteNodes.find((n) => n.id === node.id);
+        if (note?.cardId) {
+          const cid = note.cardId;
+          items.push({
+            id: "copy-card-id",
+            label: `Copy ID  [[${cid}]]`,
+            onSelect: () => copyCardId(cid),
+          });
+        }
+        items.push({
+          id: "delete-note",
+          label: "Delete note",
+          tone: "danger",
+          onSelect: () => deleteNote(node.id),
+        });
+      } else {
+        items.push({
+          id: "remove-issue",
+          label: "Remove from board",
+          tone: "danger",
+          onSelect: () => removeIssueFromBoard(node.id),
+        });
+      }
+      setMenu({ x, y, items });
     },
-    [localCoords],
+    [localCoords, copyCardId, deleteNote, removeIssueFromBoard],
   );
 
   const onEdgeContextMenu = useCallback(
     (evt: React.MouseEvent, edge: Edge) => {
       evt.preventDefault();
       const { x, y } = localCoords(evt);
-      setMenu({ x, y, target: { kind: "edge", id: edge.id } });
+      const id = edge.id;
+      setMenu({
+        x,
+        y,
+        items: [
+          {
+            id: "delete-edge",
+            label: "Delete connection",
+            tone: "danger",
+            onSelect: () => deleteEdge(id),
+          },
+        ],
+      });
     },
-    [localCoords],
+    [localCoords, deleteEdge],
   );
 
   const onEdgeDoubleClick = useCallback((_evt: React.MouseEvent, edge: Edge) => {
     setEditingEdgeId(edge.id);
   }, []);
-
-  const handleMenuAction = useCallback(
-    (target: ContextMenuTarget) => {
-      setMenu(null);
-      setData((prev) => {
-        const pruneGroups = (id: string) =>
-          prev.groups
-            .map((g) => ({ ...g, memberIds: g.memberIds.filter((m) => m !== id) }))
-            .filter((g) => g.memberIds.length >= 2);
-        if (target.kind === "issue") {
-          const { [target.id]: _drop, ...rest } = prev.issueMembers;
-          void _drop;
-          return {
-            ...prev,
-            issueMembers: rest,
-            edges: prev.edges.filter((e) => e.source !== target.id && e.target !== target.id),
-            groups: pruneGroups(target.id),
-          };
-        }
-        if (target.kind === "note") {
-          return {
-            ...prev,
-            noteNodes: prev.noteNodes.filter((n) => n.id !== target.id),
-            edges: prev.edges.filter((e) => e.source !== target.id && e.target !== target.id),
-            groups: pruneGroups(target.id),
-          };
-        }
-        return { ...prev, edges: prev.edges.filter((e) => e.id !== target.id) };
-      });
-    },
-    [setData],
-  );
 
   return (
     <div
@@ -2018,8 +2137,7 @@ function BoardInner({
         <BoardContextMenu
           x={menu.x}
           y={menu.y}
-          target={menu.target}
-          onAction={handleMenuAction}
+          items={menu.items}
           onDismiss={() => setMenu(null)}
         />
       )}
