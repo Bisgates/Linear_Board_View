@@ -1,26 +1,127 @@
 # Version Log
 
-格式：`vX.Y.Z — <一句话功能介绍>`，时间倒序。规则见 `CLAUDE.md` → Pride Versioning。
+格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
-- v0.17.1 — 修 Tab 新建子 note 把 parent 一起拖进多选：rebuild effect 为了保住 box-select / g group 的多选会把上一次 nodes 里所有 `selected:true` flag 跨 data 写回保留下来；Tab 之前 parent 是 focused+selected，rebuild 给它保留 + `buildNodes` 又给 newId 按 `focusedCardId` 加 selected，结果双选→浮出 NoteSelectionPalette 共享颜色 + 整组同移。修法：`insertCardWithLayout` 在 setData / setFocusedCardId / setEditingNoteId 之后挂一句 `setNodes(curr => curr.map(n => n.selected ? {...n, selected:false} : n))` 把旧 selected 全清掉，rebuild 落回 focusedCardId 单选分支。点击 / 箭头切焦点的其他路径不动。
-- v0.17.0 — 快捷键重新分配 + redo + connect 配对语义 + 启动默认最新 working_on view：(a) `c` 从 undo 改成 connect 模式切换（原 `x` 取消），`u` 接 undo，`shift+u` 接新的 redo；CanvasBoard 全局 keydown 里仍然 `metaKey/ctrlKey/altKey` 早退避免和 ⌘C/⌘V 冲突，shift 在 fallthrough 路径上放行所以 Shift+U 能进 redo 分支。(b) `useBoardState` 加 `redoStack`：`setData`（任何用户动作）清空 redo 栈匹配标准编辑器语义；`undo` 把 `latestRef.current` 推 redoStack 再恢复栈顶；新增 `redo` 对称——pop redoStack，把当前态推回 undoStack。endpoint 切换 / 重置时两个栈一起清。`UseBoardState` 接口加 `redo: () => boolean`，App 把 `allIssuesBoard.redo` / `workingOn.redo` 同步透传到 CanvasBoard。(c) connect 改成配对语义：进 source → 点 A → 进 target(source=A) → 点 B → 连 A→B 后**回到 source 模式**（不是 fan-out 保持同一 source），下一对 C→D、F→E ……一直按对连。空白 pane click 直接退连接（统一作"停止"手势），原"linking 模式下空白点击自动建抱图 note"流程拿掉，配套删 `linkJustFinishedRef` 防抖 ref + onWrapperDoubleClick 里的 400ms 抑制。(d) App 默认 `activeView` 从 `"all"` 改 `"working_on"`；`useWorkingOnViews` 加载 manifest 时按 `createdAt.localeCompare` 倒序挑最新作为本次会话 activeId（不写回磁盘，setActiveId 的会话内切换仍然 persist），匹配"每天建一个 view、启动默认到今天"的工作流。ShortcutsDialog 同步：拿掉 X 条目，加 C（pair connect）/ U / ⇧U 三条。：(a) window `paste` 监听抓 `clipboardData.items` 里第一个 `image/*`，读成 data URL 后用 `Image` 探一次自然尺寸，按 `min(natural, 248)` 宽度等比缩成初始显示尺寸（248 = 卡片 280 − 外层 padding 8 − 内层 padding 24，即内容区宽），挂进目标 note 的 `images: NoteImage[]`（type `{id, src, w, h}`）。目标决策：(1) 正在编辑的 note → 加进它；(2) 没编辑但单选了某张 note → 加进它；(3) 空白处粘 → 在 viewport 中心新建一张抱图 note 并 setFocusedCardId。(b) 文本数据模型从「单 body + 图片永远末尾」改成 `textSegments: string[]`（长度始终 = `images.length + 1`，`textSegments[i]` 在 `images[i]` 之前，最后一段是末尾文本），让图片上下都能有文字；`body` 字段保留为 `textSegments.join('\n')` 给 filter / 链接 label 等老消费者用。粘到现有 note 自动在末尾追加空 segment（图片下方多一个空 textarea 可输入），空白粘新建用 `textSegments: ['', '']` 保证上下都能写。删图把前后 segment 合并回一个保持长度一致。服务端 validator 接收 `textSegments` 时强校验数组长度 = `images.length + 1`，否则丢弃；客户端 `deriveSegments` 兜底从旧数据 `[body, '', '', ...]` 迁移。(c) 编辑态从「`<input>` 标题 + `<textarea>` 正文」两段式合并成「每段一个 `<textarea>`」单一文本流，blur 检查覆盖所有 textareas，Esc/⌘Enter 行为不变；展示态 segments[0] 第一行加粗（14px / 600 / `--ink`），其余 12px `--ink-soft`——本质一段内容，仅显示有 emphasis。`data-note-textarea` 挂在 segment 0 上保留外部 `focusNoteTextarea` 入口。(d) 卡片永远固定 280 宽，统一一套布局（不为图片单独走 image-fill 收紧）：内层 paper 永远 `padding: 10px 12px`，NOTE 头永远在 flow 里，图片渲染为正常 block；图片显示宽度通过 `maxW` 在 `NoteImageView` 里 render-time 等比 clamp 到 248，超出的存储宽度只是被压缩显示不会撑卡。`buildNodes` / `commitNote` / `decoratedNodes` patch type 全部加 `textSegments?: string[]`。每张图片选中卡片时浮出 4 个 10px 角 handle（`var(--paper)` 底 + 1.5px accent 描边 + nwse/nesw cursor）+ 右上角 ×（`nodrag nopan` + `onPointerDown stopPropagation`，老的 `onMouseDown` 在 ReactFlow 的 pointer-event 体系里挡不住所以换 pointer）；pointerdown 设 capture，pointermove 算 dx/dy（TL/BL 翻 dx 符号、TL/TR 翻 dy）→ clamp 横向到 `maxW`、纵向到 1200；按住 shift 锁原始 aspect，按 dx/dy 绝对值大的轴决定主轴，另一轴按 aspect 推导（也走 `maxW` 重新 clamp）；release 才一次 `onCommit({ images })` 落盘。(e) 图片区域属于卡片内容：NoteImageView 外层 wrapper 不再 `nodrag nopan`，`<img>` 也撤掉 `pointerEvents:'none'`，让 ReactFlow 从图片上的 pointerdown 接得到、能直接拖整张卡——resize handles / × 按钮通过自己的 stopPropagation 隔离不受影响。
-- v0.15.1 — working on 复选框视觉换装：v0.15.0 的"蓝填 + 居中白条"换成"蓝描边空框 + 强内辉"——1.5px `WORKING_COLOR` 描边 + `inset 0 0 6px 2px ${WORKING_COLOR}99` 内辉，整体读起来像"空盒在向内发蓝光"，比之前的实心填充更克制、更像 todo 而非 done。配套挑选阶段在 CanvasBoard 临时挂了一个 4 变体（A 微辉 / B 强辉 / C 微辉+中心点 / D 微辉脉冲呼吸）的顶部预览条以便对比选型，用户选定 B 后预览条 + 变体抽象 + `working-pulse` keyframe 一并删除，最终代码只保留 B 的内联样式。
-- v0.15.0 — Note 加 working on 三态 + 调色板单选/多选都浮到选区右上角：(a) checkbox 从 todo / done 两态扩成 todo → working on → done 三态循环；新增 `WORKING_COLOR = #3b6fb8`（在暖纸面板上读起来明确"在做"且不撞 NOTE_COLORS 里的 slate blue 选项），working 态显示填充蓝底 + 居中 7×2 白色横条（Things 3 in-progress 语义）；working 不让卡片变灰（保留用户选的 frame 色），只有 done 才把 frame 退成 `DONE_FRAME_COLOR` + 文字 muted/strikethrough。`NoteNode` / clipboard `ClipboardItemNote` / 服务端 `validate` 加 optional `working` 字段，buildNodes/复制粘贴都带上。(b) 删 NoteCard 内嵌调色板，单选与多选行为统一：board 级 `NoteSelectionPalette` 阈值从 ≥2 放宽到 ≥1，根据所有选中 note 算 bbox 右上角并固定屏幕坐标定位；active 色仅在选区颜色完全一致时高亮，混合选区不显示 active。`decoratedNodes` 不再注入 `multiSelected`（连同 NoteData.multiSelected 一并删），逻辑全部收敛到浮层。
-- v0.14.0 — NoteCard 编辑态所见即所得 + 多选共享调色板：(a) 编辑态把单一 textarea 拆成 `<input>` 标题（14px / 600）+ `<textarea>` 正文（12px / `--ink-soft`），样式与展示态 1:1 对齐，不再"展开变大"。正文 `resize:none` + `overflow:hidden`，监听 rest 用 scrollHeight 自适应，卡片随内容自然撑高，无滚动条。`data-note-textarea` 动态绑定到当前应被聚焦的字段（rest 非空挂 textarea，否则挂 title input），`focusNoteTextarea` 选择器从 `textarea[...]` 放宽到 `[...]`。blur 走 RAF 检查 activeElement，title↔body 间切换不触发误提交；title 内 Enter 跳正文起始，⌘/Ctrl+Enter 仍 commit。(b) 颜色调色板从独立一行挪到 NOTE 同行右侧；14×14 圆角矩形；条件 `editing || (selected && !multiSelected)`——单卡选中/编辑显示，多选让位给共享浮层。(c) 选中 ≥2 张 note 时显示 board 级 `MultiNoteSelectionPalette`：渲染在 `<ReactFlow>` 子层，用 `useStore` 订阅 `transform`+`nodes` 算选区 bbox 右上角，按 `screen = flow·zoom + tx/ty` 屏幕坐标定位（恒定像素尺寸，不随缩放变化）；点击颜色走 `commitNotesColor(ids, c)` 一次 setData 把所有选中 note 同步换色。`decoratedNodes` 在选中 note 总数 ≥2 时把 `multiSelected:true` 注入各张选中卡 data；浮层挂 `nodrag nopan` + `stopPropagation` 防止点击冒泡触发 pane click 清空选择。
-- v0.13.2 — 修 group 两个细节：(a) 解散后下一拖仍整组同移——`g` 解散只清了 `data.groups`，xyflow 自家 multi-drag 依然按它内部那份 `selected=true` 快照工作（不看 `data.groups`），点别处才被它接到的下一帧 select-change 清掉；改成解散时把成员 `selected: false` 同步推进 `nodes` state，React 18 在 key handler 回返时 flush，xyflow store 下一帧 sync 就和 data 一致。(b) 整个 group 区域可拖动（边框 + 卡片之间的空白都能拖）：把 dashed frame 从 `pointer-events: none` 装饰改成 `pointer-events: auto` + `zIndex: -1`，cards 仍在 z=0 之上抢 click，frame 只在"无 card 覆盖的像素"接到事件；frame 自己挂 `onPointerDown`（stopPropagation 防 ReactFlow 把它当 pane 框选）→ 用 window 级 `pointermove/pointerup` 直接平移成员，绕开 xyflow drag 系统，避免和 v0.13.1 的 position-cohesion 重复派发。起始坐标读 `data`（不读 `nodes`），让 All Issues 视图被过滤掉的成员也跟着平移；释放后一次性写回 `issueMembers`/`noteNodes`。
-- v0.13.1 — 修 v0.13.0 成组后拖动"时好时坏"：xyflow 在 `pointerdown` 那一帧从其内部 store 快照"该跟拖的 node 集合"，而我们用 `onNodesChange` 级联出的 `selected=true` 要走 React state → 下次 render → xyflow store sync，赶不上当帧 drag-start。改成把 group 的移动同步从"select 级联间接驱动"换成"position-change 级联直接驱动"：把整段级联挪进 `setNodes(current => ...)` 闭包内，组内任一成员一旦有 `position` change，按 primary 的 dx/dy 给其余可见成员合成同步 position change（dragging 标志一并复制，drag-end 也同步派发以触发 settle 落盘）；selection 级联同时保留，仅用于 halo / box-select 的视觉一致。`positionChangeIds` 去重避免和 xyflow 自身已识别的 multi-drag 重叠发事件。
-- v0.13.0 — Card 分组（移动作用域）：多选 ≥2 张 card 按 `g` 成组，再次精确选中整组按 `g` 解散；group 渲染为 1.5px 暖 sage 虚线圆角框 + 极淡 sage 底（zIndex 1，在 cards 后、Background 前）紧贴成员包围盒，跟随 drag 实时刷新。group 仅约束移动：点击任一成员经 `onNodesChange` 的 select-change 级联把整组 `selected=true`，xyflow 内置 multi-drag 即自动整组同移；其他行为（DetailPanel、edit、edge、Tab 子 note）保持独立。snap 对齐在 `liveDragCount > 1` 时跳过以保持成员相对偏移刚性；删 / 右键删 / 成员被裁后 `memberIds < 2` 的 group 自动剔除。每张 card 最多 1 组，新组形成时把成员从旧组扯出。`BoardData.groups: GroupBox[]` 落到服务端 JSON（`boardStore` validate 同步），useWorkingOnViews 新建空 view 时初始化 `groups: []`；nodes rebuild effect 学 edges 一样把旧 selected 集合贴回，避免 g/拖动/edit 的中途 data 写回吞掉多选。ShortcutsDialog 加 G 条目。
-- v0.12.1 — 修 Tab / Shift+Tab 新建的 note 不进入 edit 状态、Space 把 note 切到 edit 时光标随机不进 textarea 的回归：`focusNewNote` 这个 rAF + 30ms + 100ms 三段重试的强抢焦点 helper 之前只接到双击空白建 note 和 linking-mode 建 note 两条路径，Tab / Shift+Tab 的 `insertCardWithLayout` 和 Space → 进 edit 的 hotkey 分支只靠 NoteCard 内部那个会被 ReactFlow pane focus 抢走的 rAF。把 helper 提名为 `focusNoteTextarea` 并上移到 `insertCardWithLayout` 之前，让 Tab 创建后和 Space 切 edit 后都调一次，赢下和 ReactFlow / StrictMode 的焦点竞速。
-- v0.12.0 — NoteCard 加 done 状态：右上角 LOCAL 文字换成 Things 3 风格 todo 框（15×15 圆角方形 + 1px hairline + inset 阴影"压进纸面"，勾选后整框填充为静音灰、内置 2.2px 粗细 / -6° 倾斜的对角 check）；done=true 时整张 note 框退成静音灰、内 paper 加深、标题与正文 strikethrough + 字色 muted。`NoteNode` / `BoardData.noteNodes` 加 optional `done`，`commitNote` patch 扩展，clipboard `ClipboardItemNote` 也带上 done 让 ⌘C/⌘V 跨 view 保留状态；server `validate` 落盘 done 字段。
-- v0.11.0 — Working On 多 view 第一波打磨：(a) 顶栏 Working On tab 双击当前 view 名进入 inline 改名 (Enter 提交 / Esc 取消 / blur 也提交)；(b) ▾ 下拉里 views 按 createdAt 倒序，新建的在最上面；(c) 切 view 自动 `fitView({padding:0.2, duration:0})`，瞬间跳到包含 cards 的视野，不再停在空白区；(d) `findNextSlotNear(center, taken)` 新增——picker 加 issue 时从当前 viewport 中心向外螺旋搜空位，新 card 落在视野内；CanvasBoard 改 `forwardRef` 暴露 `getViewportCenter`；(e) 修 setActiveId 在 React useState updater 里 fire-and-forget 的 StrictMode 反模式（updater 内副作用会被 double-invoke）；server 端 `PUT /views` 加 console.error，client `saveManifest` 把 server error body 提取到 toast 文案。
-- v0.10.0 — Working On 升级成多 view 集合：顶栏 Working On tab 加 ▾ 下拉，可新建 (默认名 `YYYY-MM-DD 周X`)、双击重命名、删除（至少保留 1 个）；同一 issue 可同时在多 view，位置各自独立；服务端从单文件 `working_on.json` 改成 `working_on/<viewId>.json` + `views.json` manifest，启动时自动迁移旧文件；新增 ⌘C / ⌘V 跨 view 复制粘贴（圈选 cards + notes + 它们的 edges 一起搬，落到目标 view 视口中央，issue id 共享、note id 重生成、重复 issue 自动跳过并 toast 提示）。
-- v0.9.1 — 修 v0.9.0 两个 board 共用 CanvasBoard 后的两条交互回归：(a) edges 从 `useMemo` 改成 `useState` + `onEdgesChange` (applyEdgeChanges)，让 xyflow 内部能挂 `selected` 标记，点边后按 Delete/Backspace 才能触发 `onEdgesDelete`；同时 `deleteKeyCode={["Backspace","Delete"]}` 显式两个键都收。(b) C 键 undo 增 `evt.code === "KeyC"` 兜底 + console.log，方便排查布局/IME 时回放路径。data → 本地 edges 同步时保留旧的 selected id 集合，重建后回贴。
-- v0.9.0 — 两个 board (All Issues / Working On) 操作逻辑统一：抽出共享组件 `CanvasBoard`（继承原 WorkingOnBoard 的全部连线 / 链接模式 / 框选 / 吸附 / note / 右键 / undo / Delete 行为），通过 `displayedIssues` + `initialPositions` 两个 prop 适配两种 view；All Issues 现在也能 drag handle / X 模式连线、双击空白建 note、按 Delete 删边——边/note 纯本地视觉，不再写回 Linear parent；新增 `/api/all-issues-board` 端点 + `public/data/all_issues_board.json` 持久化；server 端 `boardStore.ts` 用 `STORE_PATHS` 表统一两个 store；client 端 `useBoardState(endpoint)` 工厂统一两个 hook；删除 `Board.tsx` / `persistence.ts` / `useWorkingOnState.ts` / `workingOnStore.ts`，把 v0.8.0 的 IssuePatch.parentId 写回路径回滚（连线不再是 Linear 父子关系）。
-- v0.8.0 — All Issues 视图 edge 可点击选中（暖红高亮）后按 Delete / Backspace 清除父子链接：edge click → 本地 selectedEdge state，按键路由到 `mutate(childId, { parentId: null })`，IssuePatch 新增 `parentId` 字段并写回 Linear `issueUpdate`；optimistic 同步把 child.parentId 置 null、并剥掉前任 parent 的 `childrenIds`，失败时一并回滚。
-- v0.7.0 — NoteCard 改 Apple HIG 同心圆角：外层 div 作色框 (padding 2 2 2 6) + radius 10，内层 paper-soft div radius `4 8 8 4` (outer−offset)，左竖条沿角部以恒定 6px 宽度收口，去掉旧设计在角内出现的硬切边。
-- v0.6.0 — Note body 内 URL / 绝对文件路径 (Mac/Linux 常见 root) 自动识别为链接，点击直通：http(s) 走 `target=_blank`，本地路径 POST /api/open 让 OS opener (`open` / `xdg-open` / `start`) 启动；nodrag/nopan + stopPropagation 隔离 xyflow drag 与 note dblclick 编辑。
-- v0.5.0 — Note 调色板 (8 莫兰迪色，默认 sage) + Cmd/Ctrl+Enter 提交 note 编辑 + 顶栏 ☰ 菜单 (Refresh / Shortcuts dialog) + 全局快捷键 X (链接模式, 点 source→target 或→空白即创建并连 note) / C (50 步 undo) / Esc 取消 + edge 双击中点编辑 label + floating edge 跟随节点拖动重路由 + edge 主轴吸附最少转弯 + 吸附对齐辅助线 (edge 对齐 + 相等 gap 两轴各一条暖红 1px 指示) + 边色调改 #7a7060 暖灰褐 + selectionOnDrag/partial select 共享到 All Issues
-- v0.4.0 — All Issues 视图按 team › project 自动分组（teams 横向相邻，project 一行 max 3 列 wrap，无 header label）+ 共享 board 行为 (`lib/boardProps.ts`) 让框选 / partial-overlap / pan-on-scroll 在所有 view 一致 + IssuePicker popover 按 team › project sticky 分组
-- v0.3.0 — Working On 视图：顶栏 view 切换器 + Add-issue popover 点击加入（6 列网格平铺）+ 自建 note 节点（双击空白创建、单输入框、首行作标题）+ 四向 handle + 任意方向 loose 连接 + 加粗暖红箭头 + edge 中点可编辑 label + 框选（touch-to-select）+ 服务端 `working_on.json` 持久化（GET/PUT /api/working-on，200ms debounce）
-- v0.2.0 — Linear Board v1：Vite/React/@xyflow 自由画布 + 顶栏 Refresh + 过滤搜索 + 项目色 + 父子连线 + 详情面板 + 8 字段写回 Linear
+- v0.17.1 — 修 Tab 新建子 note 把 parent 一起拖进多选
+  - 起因：rebuild effect 为了保 box-select / g group 多选，会把上一次 nodes 里所有 `selected:true` flag 跨 data 写回保留下来。
+  - Tab 之前 parent 是 focused+selected，rebuild 把 parent 保留 + `buildNodes` 又给 newId 按 `focusedCardId` 加 selected → 双选 → 浮出 NoteSelectionPalette 共享颜色 + 整组同移。
+  - 修法：`insertCardWithLayout` 在 setData / setFocusedCardId / setEditingNoteId 之后挂一句 `setNodes(curr => curr.map(n => n.selected ? {...n, selected:false} : n))` 把旧 selected 全清掉，rebuild 落回 focusedCardId 单选分支。
+  - 影响：点击 / 箭头切焦点的其他路径不动。
+
+- v0.17.0 — 快捷键重新分配 + redo + connect 配对语义 + 启动默认最新 working_on view
+  - **按键重排**：`c` 从 undo 改成 connect 模式切换（原 `x` 取消）；`u` 接 undo；`shift+u` 接新的 redo。CanvasBoard 全局 keydown 仍 metaKey/ctrlKey/altKey 早退避免和 ⌘C/⌘V 冲突，shift 在 fallthrough 放行所以 Shift+U 能进 redo 分支。
+  - **redo**：`useBoardState` 加 `redoStack`。setData（任何用户动作）清空 redo 栈匹配标准编辑器语义；undo 把 `latestRef.current` 推 redoStack 再恢复栈顶；新增对称 `redo`——pop redoStack，把当前态推回 undoStack。endpoint 切换 / 重置时两个栈一起清。`UseBoardState` 接口加 `redo: () => boolean`，App 把 `allIssuesBoard.redo` / `workingOn.redo` 透传到 CanvasBoard。
+  - **connect 配对语义**：进 source → 点 A → 进 target(source=A) → 点 B → 连 A→B 后回到 source 模式（不是 fan-out），下一对 C→D、F→E 一直按对连。空白 pane click 直接退连接（统一作"停止"手势）。原"linking 模式下空白点击自动建抱图 note"流程拿掉，配套删 `linkJustFinishedRef` 防抖 ref + onWrapperDoubleClick 里的 400ms 抑制。
+  - **默认视图**：App 默认 `activeView` 从 `"all"` 改 `"working_on"`；`useWorkingOnViews` 加载 manifest 时按 `createdAt.localeCompare` 倒序挑最新作为本次会话 activeId（不写回磁盘，setActiveId 的会话内切换仍 persist），匹配"每天建一个 view、启动默认到今天"的工作流。
+  - **快捷键弹窗**：ShortcutsDialog 拿掉 X 条目，加 C（pair connect）/ U / ⇧U 三条。
+
+- v0.16.0 — NoteCard 支持粘贴剪贴板图片 + 文本图片可交替
+  - **粘贴**：window `paste` 监听抓 `clipboardData.items` 里第一个 `image/*`，读成 data URL 后用 `Image` 探一次自然尺寸，按 `min(natural, 248)` 等比缩成初始显示尺寸（248 = 卡 280 − 外层 padding 8 − 内层 padding 24，即内容区宽）。
+  - 目标决策：(1) 正在编辑的 note → 加进它；(2) 没编辑但单选了某张 note → 加进它；(3) 空白处粘 → viewport 中心新建一张抱图 note 并 setFocusedCardId。
+  - **数据模型**：从「单 body + 图片永远末尾」改成 `textSegments: string[]`（长度始终 = `images.length + 1`，`textSegments[i]` 在 `images[i]` 之前，最后一段是末尾文本）让图片上下都能有文字。`body` 保留为 `textSegments.join('\n')` 给 filter / 链接 label 等老消费者用。粘到现有 note 自动追加空 segment（图片下方多一个空 textarea 可输入），空白粘新建用 `textSegments: ['', '']` 保证上下都能写。删图把前后 segment 合并回一个保持长度一致。
+  - 服务端 validator 接 `textSegments` 时强校验数组长度 = `images.length + 1`，否则丢弃；客户端 `deriveSegments` 兜底从旧数据 `[body, '', '', ...]` 迁移。
+  - **编辑态合并**：从「`<input>` 标题 + `<textarea>` 正文」两段式合并成「每段一个 `<textarea>`」单一文本流，blur 检查覆盖所有 textareas，Esc/⌘Enter 行为不变。展示态 segments[0] 第一行加粗（14px / 600 / `--ink`），其余 12px `--ink-soft`——本质一段内容，仅显示有 emphasis。`data-note-textarea` 挂在 segment 0 上保留外部 `focusNoteTextarea` 入口。
+  - **布局**：卡片永远固定 280 宽，统一布局（不为图片单独走 image-fill 收紧）：内层 paper 永远 `padding: 10px 12px`，NOTE 头永远在 flow 里，图片渲染为正常 block。图片显示宽度通过 `maxW` 在 `NoteImageView` 里 render-time 等比 clamp 到 248，超出的存储宽度只是被压缩显示不会撑卡。`buildNodes` / `commitNote` / `decoratedNodes` patch type 全部加 `textSegments?: string[]`。
+  - **图片缩放**：选中卡片浮出 4 个 10px 角 handle（`var(--paper)` 底 + 1.5px accent 描边 + nwse/nesw cursor）+ 右上角 ×（`nodrag nopan` + `onPointerDown stopPropagation`，老的 `onMouseDown` 在 ReactFlow pointer-event 体系里挡不住所以换 pointer）。pointerdown 设 capture，pointermove 算 dx/dy（TL/BL 翻 dx 符号、TL/TR 翻 dy）→ clamp 横向到 `maxW`、纵向到 1200；shift 锁原始 aspect，按 dx/dy 绝对值大的轴决定主轴另一轴按 aspect 推导（也走 `maxW` 重新 clamp）；release 才一次 `onCommit({ images })` 落盘。
+  - **图片属于卡内容**：NoteImageView 外层 wrapper 不再 `nodrag nopan`，`<img>` 撤掉 `pointerEvents:'none'`，ReactFlow 从图片上的 pointerdown 接得到能直接拖整张卡；resize handles / × 按钮通过自己的 stopPropagation 隔离不受影响。
+
+- v0.15.1 — Working on 复选框视觉换装
+  - v0.15.0 的"蓝填 + 居中白条"换成"蓝描边空框 + 强内辉"——1.5px `WORKING_COLOR` 描边 + `inset 0 0 6px 2px ${WORKING_COLOR}99` 内辉，整体读起来像"空盒在向内发蓝光"，比之前的实心填充更克制、更像 todo 而非 done。
+  - 配套挑选阶段在 CanvasBoard 临时挂了一个 4 变体（A 微辉 / B 强辉 / C 微辉+中心点 / D 微辉脉冲呼吸）的顶部预览条对比选型，选定 B 后预览条 + 变体抽象 + `working-pulse` keyframe 一并删除，最终代码只保留 B 的内联样式。
+
+- v0.15.0 — Note 加 working on 三态 + 调色板单选/多选都浮到选区右上角
+  - **三态 todo**：checkbox 从 todo / done 两态扩成 todo → working on → done 三态循环。
+  - 新增 `WORKING_COLOR = #3b6fb8`（暖纸面板上读起来明确"在做"且不撞 NOTE_COLORS 里的 slate blue 选项），working 态显示填充蓝底 + 居中 7×2 白色横条（Things 3 in-progress 语义）；working 不让卡片变灰（保留用户选的 frame 色），只有 done 才把 frame 退成 `DONE_FRAME_COLOR` + 文字 muted/strikethrough。
+  - `NoteNode` / clipboard `ClipboardItemNote` / 服务端 `validate` 加 optional `working` 字段，buildNodes/复制粘贴都带上。
+  - **调色板上浮**：删 NoteCard 内嵌调色板，单选与多选行为统一。board 级 `NoteSelectionPalette` 阈值从 ≥2 放宽到 ≥1，根据所有选中 note 算 bbox 右上角并固定屏幕坐标定位；active 色仅在选区颜色完全一致时高亮，混合选区不显示 active。`decoratedNodes` 不再注入 `multiSelected`（连同 NoteData.multiSelected 一并删），逻辑全部收敛到浮层。
+
+- v0.14.0 — NoteCard 编辑态所见即所得 + 多选共享调色板
+  - **编辑态 WYSIWYG**：把单一 textarea 拆成 `<input>` 标题（14px / 600）+ `<textarea>` 正文（12px / `--ink-soft`），样式与展示态 1:1 对齐，不再"展开变大"。正文 `resize:none` + `overflow:hidden`，监听 rest 用 scrollHeight 自适应，卡片随内容自然撑高，无滚动条。
+  - `data-note-textarea` 动态绑定到当前应被聚焦的字段（rest 非空挂 textarea，否则挂 title input），`focusNoteTextarea` 选择器从 `textarea[...]` 放宽到 `[...]`。blur 走 RAF 检查 activeElement，title↔body 切换不触发误提交；title 内 Enter 跳正文起始，⌘/Ctrl+Enter 仍 commit。
+  - **调色板挪位**：从独立一行挪到 NOTE 同行右侧；14×14 圆角矩形；条件 `editing || (selected && !multiSelected)`——单卡选中/编辑显示，多选让位给共享浮层。
+  - **多选共享浮层**：选中 ≥2 张 note 时显示 board 级 `MultiNoteSelectionPalette`，渲染在 `<ReactFlow>` 子层，用 `useStore` 订阅 `transform`+`nodes` 算选区 bbox 右上角，按 `screen = flow·zoom + tx/ty` 屏幕坐标定位（恒定像素尺寸，不随缩放变化）。点击颜色走 `commitNotesColor(ids, c)` 一次 setData 把所有选中 note 同步换色。
+  - `decoratedNodes` 在选中 note 总数 ≥2 时把 `multiSelected:true` 注入各张选中卡 data；浮层挂 `nodrag nopan` + `stopPropagation` 防止点击冒泡触发 pane click 清空选择。
+
+- v0.13.2 — 修 group 两个细节
+  - **解散后下一拖仍整组同移**：`g` 解散只清了 `data.groups`，xyflow 自家 multi-drag 按它内部那份 `selected=true` 快照工作（不看 `data.groups`），点别处才被它接到的下一帧 select-change 清掉。改成解散时把成员 `selected: false` 同步推进 `nodes` state，React 18 在 key handler 回返时 flush，xyflow store 下一帧 sync 就和 data 一致。
+  - **整个 group 区域可拖动**（边框 + 卡片之间的空白都能拖）：把 dashed frame 从 `pointer-events: none` 装饰改成 `pointer-events: auto` + `zIndex: -1`，cards 仍在 z=0 之上抢 click，frame 只在"无 card 覆盖的像素"接到事件。frame 自己挂 `onPointerDown`（stopPropagation 防 ReactFlow 把它当 pane 框选）→ 用 window 级 `pointermove/pointerup` 直接平移成员，绕开 xyflow drag 系统，避免和 v0.13.1 的 position-cohesion 重复派发。起始坐标读 `data`（不读 `nodes`），让 All Issues 视图被过滤掉的成员也跟着平移；释放后一次性写回 `issueMembers`/`noteNodes`。
+
+- v0.13.1 — 修 v0.13.0 成组后拖动"时好时坏"
+  - 根因：xyflow 在 `pointerdown` 那一帧从其内部 store 快照"该跟拖的 node 集合"，而我们用 `onNodesChange` 级联出的 `selected=true` 要走 React state → 下次 render → xyflow store sync，赶不上当帧 drag-start。
+  - 改成把 group 的移动同步从"select 级联间接驱动"换成"position-change 级联直接驱动"：把整段级联挪进 `setNodes(current => ...)` 闭包内，组内任一成员一旦有 `position` change，按 primary 的 dx/dy 给其余可见成员合成同步 position change（dragging 标志一并复制，drag-end 也同步派发以触发 settle 落盘）。
+  - selection 级联同时保留，仅用于 halo / box-select 的视觉一致。`positionChangeIds` 去重避免和 xyflow 自身已识别的 multi-drag 重叠发事件。
+
+- v0.13.0 — Card 分组（移动作用域）
+  - 多选 ≥2 张 card 按 `g` 成组，再次精确选中整组按 `g` 解散。group 渲染为 1.5px 暖 sage 虚线圆角框 + 极淡 sage 底（zIndex 1，在 cards 后、Background 前）紧贴成员包围盒，跟随 drag 实时刷新。
+  - group 仅约束移动：点击任一成员经 `onNodesChange` 的 select 级联把整组 `selected=true`，xyflow 内置 multi-drag 自动整组同移；其他行为（DetailPanel、edit、edge、Tab 子 note）保持独立。
+  - snap 对齐在 `liveDragCount > 1` 时跳过以保持成员相对偏移刚性；删 / 右键删 / 成员被裁后 `memberIds < 2` 的 group 自动剔除。每张 card 最多 1 组，新组形成时把成员从旧组扯出。
+  - `BoardData.groups: GroupBox[]` 落到服务端 JSON（`boardStore` validate 同步），useWorkingOnViews 新建空 view 时初始化 `groups: []`；nodes rebuild effect 学 edges 一样把旧 selected 集合贴回，避免 g/拖动/edit 中途 data 写回吞掉多选。ShortcutsDialog 加 G 条目。
+
+- v0.12.1 — 修 Tab / Shift+Tab 新建的 note 不进入 edit 状态、Space 把 note 切到 edit 时光标随机不进 textarea
+  - `focusNewNote` 这个 rAF + 30ms + 100ms 三段重试的强抢焦点 helper 之前只接到双击空白建 note 和 linking-mode 建 note 两条路径，Tab / Shift+Tab 的 `insertCardWithLayout` 和 Space → 进 edit 的 hotkey 分支只靠 NoteCard 内部那个会被 ReactFlow pane focus 抢走的 rAF。
+  - 把 helper 提名为 `focusNoteTextarea` 并上移到 `insertCardWithLayout` 之前，让 Tab 创建后和 Space 切 edit 后都调一次，赢下和 ReactFlow / StrictMode 的焦点竞速。
+
+- v0.12.0 — NoteCard 加 done 状态
+  - 右上角 LOCAL 文字换成 Things 3 风格 todo 框：15×15 圆角方形 + 1px hairline + inset 阴影"压进纸面"，勾选后整框填充为静音灰、内置 2.2px 粗细 / -6° 倾斜的对角 check。
+  - done=true 时整张 note 框退成静音灰、内 paper 加深、标题与正文 strikethrough + 字色 muted。
+  - `NoteNode` / `BoardData.noteNodes` 加 optional `done`，`commitNote` patch 扩展，clipboard `ClipboardItemNote` 也带上 done 让 ⌘C/⌘V 跨 view 保留状态；server `validate` 落盘 done 字段。
+
+- v0.11.0 — Working On 多 view 第一波打磨
+  - 顶栏 Working On tab 双击当前 view 名进入 inline 改名（Enter 提交 / Esc 取消 / blur 也提交）。
+  - ▾ 下拉里 views 按 createdAt 倒序，新建的在最上面。
+  - 切 view 自动 `fitView({padding:0.2, duration:0})`，瞬间跳到包含 cards 的视野，不再停在空白区。
+  - `findNextSlotNear(center, taken)` 新增：picker 加 issue 时从当前 viewport 中心向外螺旋搜空位，新 card 落在视野内。CanvasBoard 改 `forwardRef` 暴露 `getViewportCenter`。
+  - 修 setActiveId 在 React useState updater 里 fire-and-forget 的 StrictMode 反模式（updater 内副作用会被 double-invoke）。
+  - 服务端 `PUT /views` 加 console.error，client `saveManifest` 把 server error body 提取到 toast 文案。
+
+- v0.10.0 — Working On 升级成多 view 集合
+  - 顶栏 Working On tab 加 ▾ 下拉，可新建（默认名 `YYYY-MM-DD 周X`）、双击重命名、删除（至少保留 1 个）。同一 issue 可同时在多 view，位置各自独立。
+  - 服务端从单文件 `working_on.json` 改成 `working_on/<viewId>.json` + `views.json` manifest，启动时自动迁移旧文件。
+  - 新增 ⌘C / ⌘V 跨 view 复制粘贴（圈选 cards + notes + 它们的 edges 一起搬，落到目标 view 视口中央，issue id 共享、note id 重生成，重复 issue 自动跳过并 toast 提示）。
+
+- v0.9.1 — 修 v0.9.0 两个 board 共用 CanvasBoard 后的两条交互回归
+  - **edge 删除回归**：edges 从 `useMemo` 改成 `useState` + `onEdgesChange`（applyEdgeChanges），让 xyflow 内部能挂 `selected` 标记，点边后按 Delete/Backspace 才能触发 `onEdgesDelete`。`deleteKeyCode={["Backspace","Delete"]}` 显式两个键都收。
+  - **C 键 undo 兜底**：增 `evt.code === "KeyC"` + console.log，方便排查布局/IME 时回放路径。
+  - data → 本地 edges 同步时保留旧的 selected id 集合，重建后回贴。
+
+- v0.9.0 — 两个 board (All Issues / Working On) 操作逻辑统一
+  - 抽出共享组件 `CanvasBoard`（继承原 WorkingOnBoard 的全部连线 / 链接模式 / 框选 / 吸附 / note / 右键 / undo / Delete 行为），通过 `displayedIssues` + `initialPositions` 两个 prop 适配两种 view。
+  - All Issues 现在也能 drag handle / X 模式连线、双击空白建 note、按 Delete 删边——边/note 纯本地视觉，不再写回 Linear parent。
+  - 新增 `/api/all-issues-board` 端点 + `public/data/all_issues_board.json` 持久化；server 端 `boardStore.ts` 用 `STORE_PATHS` 表统一两个 store；client 端 `useBoardState(endpoint)` 工厂统一两个 hook。
+  - 删除 `Board.tsx` / `persistence.ts` / `useWorkingOnState.ts` / `workingOnStore.ts`，把 v0.8.0 的 IssuePatch.parentId 写回路径回滚（连线不再是 Linear 父子关系）。
+
+- v0.8.0 — All Issues 视图 edge 可点击选中（暖红高亮）后按 Delete / Backspace 清除父子链接
+  - edge click → 本地 selectedEdge state，按键路由到 `mutate(childId, { parentId: null })`。
+  - IssuePatch 新增 `parentId` 字段并写回 Linear `issueUpdate`；optimistic 同步把 child.parentId 置 null、并剥掉前任 parent 的 `childrenIds`，失败时一并回滚。
+
+- v0.7.0 — NoteCard 改 Apple HIG 同心圆角
+  - 外层 div 作色框（padding 2 2 2 6）+ radius 10，内层 paper-soft div radius `4 8 8 4`（outer−offset）。
+  - 左竖条沿角部以恒定 6px 宽度收口，去掉旧设计在角内出现的硬切边。
+
+- v0.6.0 — Note body 内 URL / 绝对文件路径自动识别为链接
+  - 匹配 http(s) URL 和 Mac/Linux 常见 root 的绝对路径，点击直通：http(s) 走 `target=_blank`，本地路径 POST /api/open 让 OS opener（`open` / `xdg-open` / `start`）启动。
+  - nodrag/nopan + stopPropagation 隔离 xyflow drag 与 note dblclick 编辑。
+
+- v0.5.0 — Note 调色板 + Cmd/Ctrl+Enter + ☰ 菜单 + 全局快捷键 + edge 重路由 / 吸附
+  - Note 调色板：8 莫兰迪色，默认 sage。
+  - Cmd/Ctrl+Enter 提交 note 编辑。
+  - 顶栏 ☰ 菜单：Refresh / Shortcuts dialog。
+  - 全局快捷键 X（链接模式：点 source→target 或→空白即创建并连 note）/ C（50 步 undo）/ Esc 取消。
+  - edge 双击中点编辑 label；floating edge 跟随节点拖动重路由；主轴吸附最少转弯；吸附对齐辅助线（edge 对齐 + 相等 gap 两轴各一条暖红 1px 指示）。
+  - 边色调改 #7a7060 暖灰褐；selectionOnDrag / partial select 共享到 All Issues。
+
+- v0.4.0 — All Issues 视图按 team › project 自动分组
+  - teams 横向相邻，project 一行 max 3 列 wrap，无 header label。
+  - 共享 board 行为（`lib/boardProps.ts`）让框选 / partial-overlap / pan-on-scroll 在所有 view 一致。
+  - IssuePicker popover 按 team › project sticky 分组。
+
+- v0.3.0 — Working On 视图
+  - 顶栏 view 切换器 + Add-issue popover 点击加入（6 列网格平铺）。
+  - 自建 note 节点：双击空白创建、单输入框、首行作标题。
+  - 四向 handle + 任意方向 loose 连接 + 加粗暖红箭头 + edge 中点可编辑 label。
+  - 框选（touch-to-select）；服务端 `working_on.json` 持久化（GET/PUT /api/working-on，200ms debounce）。
+
+- v0.2.0 — Linear Board v1
+  - Vite/React/@xyflow 自由画布 + 顶栏 Refresh + 过滤搜索 + 项目色 + 父子连线 + 详情面板 + 8 字段写回 Linear。
+
 - v0.0.1 — 初始化仓库与 README
