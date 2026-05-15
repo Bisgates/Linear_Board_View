@@ -2,33 +2,118 @@ import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "rea
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { DEFAULT_NOTE_COLOR, openLocalPath, type NoteImage } from "../lib/workingOn";
 
-// Match http(s) URLs and absolute Mac / Linux file paths (common roots only).
-// Stops at whitespace and common trailing punctuation so a URL in parens or a
-// path followed by a comma still parses cleanly.
-const LINK_REGEX =
-  /(https?:\/\/[^\s)\]}>]+|\/(?:Users|Volumes|tmp|var|opt|Applications|Library|home|private|etc)\/[^\s)\]}>]+)/g;
+// Fixed wiki-link blue, deliberately *not* tied to the per-note accent or any
+// CSS theme variable. Wiki references are a global cross-card feature, so
+// they read consistently regardless of which colored note they sit inside.
+// Picked at the soft end of "Notion / Bear / Roam" link blue — bright enough
+// to read on the warm cream paper, muted enough not to fight the body ink.
+const WIKI_LINK_COLOR = "#5b8def";
 
-function renderTokens(text: string, accent: string): ReactNode[] {
+// Match three things in one pass so spans never overlap and ordering is
+// preserved by `lastIndex`:
+//   1. `[[YYMMDDxx]]` — wiki-style internal card link (strict shape).
+//   2. http(s):// URLs.
+//   3. Absolute Mac / Linux file paths under common roots.
+// Each branch is captured separately so the renderer can dispatch by which
+// group matched without re-parsing the matched text. URL / path branches stop
+// at whitespace and common trailing punctuation so a URL in parens or a path
+// followed by a comma still parse cleanly.
+const TOKEN_REGEX =
+  /(\[\[[0-9]{6}[a-z]{2}\]\])|(https?:\/\/[^\s)\]}>]+)|(\/(?:Users|Volumes|tmp|var|opt|Applications|Library|home|private|etc)\/[^\s)\]}>]+)/g;
+
+interface RenderTokensOpts {
+  /** Brand-stable accent for normal links / valid card refs. */
+  accent: string;
+  /** Resolves a card link to its current node id, or null if the link is broken
+   *  (target deleted, or doesn't exist on the active board). */
+  resolveCardLink?: (cardId: string) => string | null;
+  /** Click handler for valid card links. Receives the *node* id, not the cardId. */
+  onJumpToCardNode?: (nodeId: string) => void;
+}
+
+function renderTokens(text: string, opts: RenderTokensOpts): ReactNode[] {
+  const { accent, resolveCardLink, onJumpToCardNode } = opts;
   const tokens: ReactNode[] = [];
   let lastIdx = 0;
   let key = 0;
-  LINK_REGEX.lastIndex = 0;
+  TOKEN_REGEX.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = LINK_REGEX.exec(text)) !== null) {
+  while ((m = TOKEN_REGEX.exec(text)) !== null) {
     if (m.index > lastIdx) tokens.push(text.slice(lastIdx, m.index));
-    const link = m[0];
-    const linkStyle: React.CSSProperties = {
-      color: accent,
-      textDecoration: "underline",
-      cursor: "pointer",
-      wordBreak: "break-all",
-    };
-    if (link.startsWith("http")) {
+    const matched = m[0];
+    const isCardLink = m[1] !== undefined;
+    const isUrl = m[2] !== undefined;
+
+    if (isCardLink) {
+      // Wiki link `[[YYMMDDxx]]` — render as a chip-style click target. No
+      // underline (per user request); a fixed wiki-link blue (Notion / Bear
+      // / Roam adjacent) carries the "this is a link" signal, *not* the
+      // per-note accent — wiki references are a global feature, so they
+      // shouldn't recolor with the card's frame swatch. Font-family +
+      // font-size inherit from surrounding body text. Hover lights the chip
+      // with the same blue at ~12% alpha.
+      // Broken / cross-board targets share the chip shape but in warm-red
+      // with a `not-allowed` cursor.
+      const cardId = matched.slice(2, -2);
+      const targetNodeId = resolveCardLink ? resolveCardLink(cardId) : null;
+      const found = targetNodeId !== null;
+      // `WIKI_LINK_COLOR` defined at module scope above the renderer.
+      const baseColor = found ? WIKI_LINK_COLOR : "var(--warm-red)";
+      const style: React.CSSProperties = {
+        color: baseColor,
+        textDecoration: "none",
+        cursor: found ? "pointer" : "not-allowed",
+        // Tight chip padding so hover bg has somewhere to render without
+        // visibly expanding the inline line height.
+        padding: "0 2px",
+        borderRadius: 3,
+        transition: "background-color 0.1s",
+        opacity: found ? 1 : 0.85,
+      };
       tokens.push(
         <a
           key={key++}
           className="nodrag nopan"
-          href={link}
+          href="#"
+          title={found ? `jump to ${cardId}` : `broken link — no card with id ${cardId} on this board`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (found && targetNodeId && onJumpToCardNode) onJumpToCardNode(targetNodeId);
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onMouseEnter={(e) => {
+            // `${color}1f` ≈ 12% alpha when the color is a 6-digit hex
+            // (matches both WIKI_LINK_COLOR and most note-accent swatches).
+            // CSS variables (warm-red for broken links) fall back to a
+            // fixed warm-red overlay so the chip still highlights visibly.
+            const tint =
+              baseColor.startsWith("#") && baseColor.length === 7
+                ? `${baseColor}1f`
+                : "rgba(178,58,72,0.10)";
+            (e.currentTarget as HTMLAnchorElement).style.backgroundColor = tint;
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLAnchorElement).style.backgroundColor = "transparent";
+          }}
+          style={style}
+        >
+          {matched}
+        </a>,
+      );
+    } else if (isUrl) {
+      const linkStyle: React.CSSProperties = {
+        color: accent,
+        textDecoration: "underline",
+        cursor: "pointer",
+        wordBreak: "break-all",
+      };
+      tokens.push(
+        <a
+          key={key++}
+          className="nodrag nopan"
+          href={matched}
           target="_blank"
           rel="noopener noreferrer"
           onMouseDown={(e) => e.stopPropagation()}
@@ -36,30 +121,36 @@ function renderTokens(text: string, accent: string): ReactNode[] {
           onDoubleClick={(e) => e.stopPropagation()}
           style={linkStyle}
         >
-          {link}
+          {matched}
         </a>,
       );
     } else {
+      const linkStyle: React.CSSProperties = {
+        color: accent,
+        textDecoration: "underline",
+        cursor: "pointer",
+        wordBreak: "break-all",
+      };
       tokens.push(
         <a
           key={key++}
           className="nodrag nopan"
           href="#"
-          title={`open ${link}`}
+          title={`open ${matched}`}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            void openLocalPath(link);
+            void openLocalPath(matched);
           }}
           onDoubleClick={(e) => e.stopPropagation()}
           style={linkStyle}
         >
-          {link}
+          {matched}
         </a>,
       );
     }
-    lastIdx = m.index + link.length;
+    lastIdx = m.index + matched.length;
   }
   if (lastIdx < text.length) tokens.push(text.slice(lastIdx));
   return tokens;
@@ -74,6 +165,8 @@ interface NoteData {
   autoEdit?: boolean;
   images?: NoteImage[];
   textSegments?: string[];
+  /** This card's wiki-style id (`YYMMDDxx`); empty until migration runs. */
+  cardId?: string;
   onCommit?: (patch: {
     body?: string;
     color?: string;
@@ -83,6 +176,11 @@ interface NoteData {
     textSegments?: string[];
   }) => void;
   onEditEnd?: () => void;
+  /** Resolves a `[[cardId]]` reference to the corresponding xyflow node id on
+   *  the active board, or null if no such card exists. */
+  resolveCardLink?: (cardId: string) => string | null;
+  /** Pan to the named node id while preserving the current zoom level. */
+  onJumpToCardNode?: (nodeId: string) => void;
 }
 
 /**
@@ -452,6 +550,13 @@ function NoteCardImpl({ data, selected }: Props) {
         e.stopPropagation();
         setEditing(true);
       }}
+      onContextMenu={(e) => {
+        // Right-click in editing mode goes to the textarea so the browser's
+        // native menu (spellcheck, paste, etc.) still works. Otherwise we
+        // let the event bubble up to xyflow's `onNodeContextMenu` in
+        // CanvasBoard, which builds the per-target menu (Copy ID + Delete).
+        if (editing) e.stopPropagation();
+      }}
       style={{
         width: cardWidth,
         // The outer block is the color "frame" itself; the inner paper card
@@ -643,7 +748,13 @@ function NoteCardImpl({ data, selected }: Props) {
                       };
                   return (
                     <div key={lineIdx} style={lineStyle}>
-                      {line ? renderTokens(line, color) : " "}
+                      {line
+                        ? renderTokens(line, {
+                            accent: color,
+                            resolveCardLink: data.resolveCardLink,
+                            onJumpToCardNode: data.onJumpToCardNode,
+                          })
+                        : " "}
                     </div>
                   );
                 })}

@@ -2,6 +2,15 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.19.0 — NoteCard 双向链接 `[[YYMMDDxx]]` + 右键扩展菜单
+  - **cardId 字段**：`NoteNode` 加可选 `cardId`（格式 `YYMMDDxx`：6 位本地日期 + 2 位随机 a–z 字母，单日 676 槽位足够单用户用）；纯函数生成器 `lib/cardId.ts` 先随机采样后落到 26×26 穷举扫，单日满了才返回 null（fail-loud 不静默碰撞）；`server/boardStore.ts` validator 用同一正则强校验，乱写的 cardId 在持久层就被拒。
+  - **首启动迁移**：App 在两块 board（active working_on view + all_issues_board）loaded 后扫一遍 noteNodes，缺 `cardId` 的用今天日期前缀生成、批内去重、写回 store；幂等——重复 load 自动短路；新建 / 粘贴的 note 也走同一 effect 自动补 ID（依赖数组监听 noteNodes 变化）。
+  - **wiki 链接渲染**：NoteCard 的 token 解析合成单条 `[[YYMMDDxx]] | http(s)// | /Users…/` 联合正则一次扫，避免 span 重叠；命中 `[[id]]` 时通过 `resolveCardLink(cardId)→nodeId|null`（来自 CanvasBoard 的 `cardIdToNodeId` Map）渲染成 chip：固定 `WIKI_LINK_COLOR = #5b8def`（**不**跟主题 accent 走，全局 wiki 引用要全卡色一致），无下划线，hover 加 `${color}1f` ≈12% alpha 背景 tint，`padding: 0 2px / borderRadius: 3 / transition: 0.1s`；编辑态（textarea 内）保留原文方便编辑。
+  - **broken / cross-board**：`var(--warm-red)` + `cursor: not-allowed` + 0.85 opacity + tooltip 解释，hover tint 用固定红色 fallback。当前实现只解析当前 board 内的 cardId，跨 view 显示为 broken（后续要扩可以把 lookup map 抬到 App 层）。
+  - **跳转动画**：点 chip → CanvasBoard 的 `jumpToNode` 取 `reactFlow.getViewport().zoom` + 目标 node 的几何中心（`position + measured size / 2`），调 `setCenter(cx, cy, { zoom, duration: 400 })`——**保持当前 zoom 只 pan**；同步 `setFocusedCardId(nodeId)` 让 halo glow 落到目标卡，键盘 nav 接得上。
+  - **右键扩展菜单**：`BoardContextMenu` 重写成 data-driven `items: MenuItem[]`（`{id, label, onSelect, tone?: 'default'|'danger', disabled?}`），暖纸 bg / hairline border / soft shadow / hover tint，danger 行 warm-red，Esc / 外点 / 二次右键（capture-phase contextmenu listener）都关；NoteCard 自己的 onContextMenu 拆掉只保留编辑态 stopPropagation 让 textarea 拿原生菜单（spellcheck/paste），右键转交 xyflow 的 `onNodeContextMenu` → CanvasBoard 按 target 类型构 items：note → `[Copy ID [[xxx]], Delete note]`、issue → `[Remove from board]`、edge → `[Delete connection]`，每行自闭包它的 callback，没有中央 dispatcher。
+  - **Copy ID 行为**：点菜单项 → `navigator.clipboard.writeText(\`[[${cardId}]]\`)`（连方括号一起复制，下张卡 paste 即用）+ 绿色 toast「已复制 [[xxx]]」4s；clipboard 写失败回退红色 error toast。
+
 - v0.18.0 — 背景色调淡为 warm-softer-1 + 颜色 token 全面语义化
   - **背景三层换色**：canvas / panel / card 由 `#f4ecdd` / `#ede2cc` / `#ede2cc` 调到 `#f7f6f1` / `#f1eee8` / `#fcfbf8`，本质是 warm-soft 基色 S×0.65、L+1.5pp（饱和度做主驱动，亮度只微调，避免三层压平成纯白）。整页"奶油黄"明显退一档但仍带暖意；前景文字 / accent / status / project 色不动，跟原 warm 系一致。
   - **颜色 token 语义化**：原本散落在 IssueCard / FilterBar / DetailPanel / NoteCard / Toast / CanvasBoard / projectColor.ts 里的硬编码 hex（priority / state / 12 色 project palette / edge / dashed selection / done frame / working indicator / toast 三色）全部抽进 `src/index.css` 的 `:root`，用 `--canvas` / `--panel` / `--card` / `--ink*` / `--prio-*` / `--status-*` / `--proj-1..12` / `--note-done` / `--note-working` / `--edge` / `--selection-dash` / `--toast-*` 命名约定。`projectColor()` 改返回 `var(--proj-N)`。

@@ -12,13 +12,48 @@ import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
 import { useWorkingOnViews } from "./lib/useWorkingOnViews";
-import { findNextSlotNear } from "./lib/workingOn";
+import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
+import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
 import type { ClipboardPayload } from "./lib/clipboard";
 
 let toastSeq = 0;
+
+/**
+ * Mint cardIds for any NoteNode missing one. Returns the (possibly identical)
+ * notes array — identity-equal when nothing changed so callers can early-out.
+ *
+ * Existing cardIds are preserved as-is. Newly-minted ids are deduplicated
+ * against the live set so a single batch never collides with itself; the day
+ * prefix is read from the user's local clock since no NoteNode carries a
+ * createdAt yet.
+ *
+ * Notes whose pool is exhausted (`generateCardId` returns null — only
+ * possible if a single day already has all 676 suffixes used) are left
+ * untouched; another migration on the next load will retry under tomorrow's
+ * date prefix.
+ */
+function migrateCardIds(notes: NoteNode[]): { next: NoteNode[]; minted: number } {
+  const taken = new Set<string>();
+  for (const n of notes) {
+    if (n.cardId) taken.add(n.cardId);
+  }
+  const now = new Date();
+  let mintedCount = 0;
+  let changed = false;
+  const next = notes.map((n) => {
+    if (n.cardId) return n;
+    const id = generateCardId(now, taken);
+    if (!id) return n;
+    taken.add(id);
+    mintedCount += 1;
+    changed = true;
+    return { ...n, cardId: id };
+  });
+  return { next: changed ? next : notes, minted: mintedCount };
+}
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<SnapshotFile | null>(null);
@@ -62,6 +97,35 @@ export default function App() {
       }
     })();
   }, []);
+
+  // One-shot migration per board load: any note that pre-dates the wiki-link
+  // system (no `cardId` field) gets one minted and persisted. The migration
+  // is idempotent — once every note has an id, the effect short-circuits on
+  // subsequent runs, so reloading the same board never re-mints. New notes
+  // created after migration are *not* auto-assigned here (that lives in the
+  // Tab/dblclick paths); but as a safety net the same loop catches them on
+  // the next load if anything ever slips through.
+  useEffect(() => {
+    if (!workingOn.loaded) return;
+    if (!workingOn.data.noteNodes.some((n) => !n.cardId)) return;
+    workingOn.setData((prev) => {
+      const result = migrateCardIds(prev.noteNodes);
+      if (result.next === prev.noteNodes) return prev;
+      console.log(`[card-id] minted ${result.minted} cardIds (working_on)`);
+      return { ...prev, noteNodes: result.next };
+    });
+  }, [workingOn.loaded, workingOn.data.noteNodes, workingOn.setData]);
+
+  useEffect(() => {
+    if (!allIssuesBoard.loaded) return;
+    if (!allIssuesBoard.data.noteNodes.some((n) => !n.cardId)) return;
+    allIssuesBoard.setData((prev) => {
+      const result = migrateCardIds(prev.noteNodes);
+      if (result.next === prev.noteNodes) return prev;
+      console.log(`[card-id] minted ${result.minted} cardIds (all_issues)`);
+      return { ...prev, noteNodes: result.next };
+    });
+  }, [allIssuesBoard.loaded, allIssuesBoard.data.noteNodes, allIssuesBoard.setData]);
 
   const refresh = useCallback(async () => {
     setSyncing(true);
