@@ -28,7 +28,7 @@ export default function App() {
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [activeView, setActiveView] = useState<ActiveView>("all");
+  const [activeView, setActiveView] = useState<ActiveView>("working_on");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dropdownAnchor, setDropdownAnchor] = useState<{ x: number; y: number; width: number } | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
@@ -324,6 +324,7 @@ export default function App() {
               loaded={allIssuesBoard.loaded}
               setData={allIssuesBoard.setData}
               undo={allIssuesBoard.undo}
+              redo={allIssuesBoard.redo}
               initialPositions={allIssuesInitialPositions}
               loadingLabel="loading all_issues_board…"
               onSelectIssue={setSelectedId}
@@ -341,6 +342,7 @@ export default function App() {
               loaded={workingOn.loaded}
               setData={workingOn.setData}
               undo={workingOn.undo}
+              redo={workingOn.redo}
               loadingLabel={`loading ${activeViewName ?? "working_on"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}

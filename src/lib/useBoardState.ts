@@ -13,6 +13,7 @@ export interface UseBoardState {
   loaded: boolean;
   setData: (updater: BoardData | ((prev: BoardData) => BoardData)) => void;
   undo: () => boolean;
+  redo: () => boolean;
 }
 
 const DEBOUNCE_MS = 200;
@@ -30,6 +31,9 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef<BoardData>(EMPTY_BOARD);
   const undoStack = useRef<BoardData[]>([]);
+  // redoStack tracks states the user has undone past — any fresh user action
+  // (via setData) wipes it, matching standard editor semantics.
+  const redoStack = useRef<BoardData[]>([]);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
@@ -39,6 +43,7 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
     if (!endpoint) {
       latestRef.current = EMPTY_BOARD;
       undoStack.current = [];
+      redoStack.current = [];
       setDataState(EMPTY_BOARD);
       setLoaded(false);
       return;
@@ -51,6 +56,7 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
         if (cancelled) return;
         latestRef.current = d;
         undoStack.current = [];
+        redoStack.current = [];
         setDataState(d);
         setLoaded(true);
       } catch (e) {
@@ -85,6 +91,9 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
         if (next === prev) return prev;
         undoStack.current.push(prev);
         if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+        // Fresh action invalidates the redo history — once you diverge from
+        // the undone timeline, the previously-redoable states are gone.
+        redoStack.current = [];
         latestRef.current = next;
         schedule();
         return next;
@@ -96,13 +105,26 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
   const undo = useCallback<UseBoardState["undo"]>(() => {
     const prev = undoStack.current.pop();
     if (!prev) return false;
+    redoStack.current.push(latestRef.current);
+    if (redoStack.current.length > MAX_UNDO) redoStack.current.shift();
     latestRef.current = prev;
     setDataState(prev);
     schedule();
     return true;
   }, [schedule]);
 
-  return { data, loaded, setData, undo };
+  const redo = useCallback<UseBoardState["redo"]>(() => {
+    const next = redoStack.current.pop();
+    if (!next) return false;
+    undoStack.current.push(latestRef.current);
+    if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+    latestRef.current = next;
+    setDataState(next);
+    schedule();
+    return true;
+  }, [schedule]);
+
+  return { data, loaded, setData, undo, redo };
 }
 
 export const useWorkingOnState = (onError?: (e: unknown) => void) =>

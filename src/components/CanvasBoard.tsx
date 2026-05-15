@@ -57,6 +57,7 @@ interface CanvasBoardProps {
   loaded: boolean;
   setData: (updater: BoardData | ((prev: BoardData) => BoardData)) => void;
   undo?: () => boolean;
+  redo?: () => boolean;
   onSelectIssue?: (id: string | null) => void;
   selectedIssueId?: string | null;
   /**
@@ -581,6 +582,7 @@ function BoardInner({
   loaded,
   setData,
   undo,
+  redo,
   onSelectIssue,
   selectedIssueId,
   initialPositions,
@@ -661,7 +663,6 @@ function BoardInner({
       });
     });
   }, [viewKey, loaded, reactFlow]);
-  const linkJustFinishedRef = useRef(0);
   const [snapGuides, setSnapGuides] = useState<Guide[]>([]);
   const [gapGuides, setGapGuides] = useState<GapGuide[]>([]);
 
@@ -1011,7 +1012,10 @@ function BoardInner({
             ],
           }));
         }
-        setLinking({ mode: "off" });
+        // Continuous connect — pair semantics. After wiring this edge, drop
+        // back to source mode so the next click starts a brand-new pair
+        // (a→b, then c→d, then f→e, ...). Esc / c / empty-pane click exits.
+        setLinking({ mode: "source" });
         return;
       }
       setFocusedCardId(node.id);
@@ -1106,8 +1110,10 @@ function BoardInner({
   );
 
   // Global hotkeys (board-scope, work whenever no text input is focused):
-  //   X         = link mode toggle
-  //   C         = undo
+  //   C         = link/connect mode toggle (continuous — same source fans out
+  //               until Esc / C exits)
+  //   U         = undo
+  //   Shift+U   = redo (undo the undo)
   //   Esc       = exit link mode OR exit note-edit mode (halo stays put)
   //   ↑↓←→     = spatial-nearest-neighbor card navigation (no DetailPanel)
   //   Space     = note → enter inline edit; issue → open DetailPanel
@@ -1126,7 +1132,9 @@ function BoardInner({
       ArrowRight: "right",
     };
     const onKey = (evt: KeyboardEvent) => {
-      // Note: we deliberately allow Shift through (needed for Shift+Tab).
+      // Note: we deliberately allow Shift through (needed for Shift+Tab,
+      // Shift+U redo). metaKey/ctrlKey/altKey still abort so ⌘C/⌘V etc.
+      // can do their own thing.
       if (evt.metaKey || evt.ctrlKey || evt.altKey) return;
       const editable = isEditable(evt.target) || isEditable(document.activeElement);
 
@@ -1148,7 +1156,10 @@ function BoardInner({
       // The rest of the hotkeys never fire when a text input has focus.
       if (editable) return;
 
-      if (evt.key === "x" || evt.key === "X") {
+      // c — toggle connect / link mode. Continuous: once in target mode, a
+      // wired edge keeps the same source so the user can fan out without
+      // re-pressing c (see onNodeClick + onPaneClick below). c again exits.
+      if (evt.key === "c" || evt.key === "C") {
         evt.preventDefault();
         setLinking((prev) => (prev.mode === "off" ? { mode: "source" } : { mode: "off" }));
         return;
@@ -1199,10 +1210,16 @@ function BoardInner({
         }
         return;
       }
-      if ((evt.key === "c" || evt.key === "C" || evt.code === "KeyC") && undo) {
+      // u — undo;  shift+u — redo (undo the undo).
+      if (evt.key === "u" || evt.key === "U") {
         evt.preventDefault();
-        const ok = undo();
-        console.log(`[canvas-board] undo via C key → ${ok ? "ok" : "nothing to undo"}`);
+        if (evt.shiftKey) {
+          const ok = redo?.() ?? false;
+          console.log(`[canvas-board] redo via shift+U → ${ok ? "ok" : "nothing to redo"}`);
+        } else {
+          const ok = undo?.() ?? false;
+          console.log(`[canvas-board] undo via U key → ${ok ? "ok" : "nothing to undo"}`);
+        }
         return;
       }
 
@@ -1264,7 +1281,7 @@ function BoardInner({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData]);
+  }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData]);
 
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier
@@ -1665,34 +1682,18 @@ function BoardInner({
   }, [linking, issuesById, data.noteNodes]);
 
   const onPaneClick = useCallback(
-    (evt: React.MouseEvent) => {
+    (_evt: React.MouseEvent) => {
       setMenu(null);
-      // Linking mode: second click on empty pane spawns a new note at the
-      // cursor and wires the source → note edge in one undo step.
-      if (linking.mode === "target") {
-        const pt = reactFlow.screenToFlowPosition({ x: evt.clientX, y: evt.clientY });
-        const noteId = shortId("n");
-        const edgeId = shortId("e");
-        const srcId = linking.source;
-        setData((prev) => ({
-          ...prev,
-          noteNodes: [...prev.noteNodes, { id: noteId, body: "", x: pt.x, y: pt.y }],
-          edges: [
-            ...prev.edges,
-            { id: edgeId, source: srcId, target: noteId } satisfies BoardEdge,
-          ],
-        }));
-        setEditingNoteId(noteId);
-        setFocusedCardId(noteId);
+      // Empty-pane click during connect mode is the user's "stop" gesture —
+      // exit linking and don't deselect anything else.
+      if (linking.mode !== "off") {
         setLinking({ mode: "off" });
-        linkJustFinishedRef.current = Date.now();
-        focusNoteTextarea(noteId);
         return;
       }
       setFocusedCardId(null);
       onSelectIssue?.(null);
     },
-    [linking, reactFlow, setData, focusNoteTextarea, onSelectIssue],
+    [linking.mode, onSelectIssue],
   );
 
   // Double-click on the empty pane creates a new note. We attach this at the
@@ -1701,10 +1702,6 @@ function BoardInner({
   // detail===2 detection on the pane handler.
   const onWrapperDoubleClick = useCallback(
     (evt: React.MouseEvent) => {
-      // Suppress the dblclick branch if the leading click just spawned a linked
-      // note (otherwise a fast double-click in linking mode would create two).
-      if (Date.now() - linkJustFinishedRef.current < 400) return;
-
       const target = evt.target as Element | null;
       if (!target) return;
       if (target.closest(".react-flow__node")) return;

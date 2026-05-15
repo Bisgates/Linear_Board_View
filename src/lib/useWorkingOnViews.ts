@@ -35,10 +35,19 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
     (async () => {
       try {
         const m = await loadManifest();
-        if (!cancelled) {
-          setManifest(m);
-          setLoaded(true);
-        }
+        if (cancelled) return;
+        // Boot override — open the most-recently-created view regardless of
+        // what was persisted as `activeId`. The on-disk activeId is left
+        // untouched; setActiveId persists the user's intra-session choice
+        // but the next boot still defaults to the latest view (matches the
+        // user's "create-a-view-per-day, default to today" workflow).
+        const latest =
+          m.views.length > 0
+            ? [...m.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
+            : null;
+        const boot = latest && latest.id !== m.activeId ? { ...m, activeId: latest.id } : m;
+        setManifest(boot);
+        setLoaded(true);
       } catch (e) {
         console.error(`[useWorkingOnViews] load failed`, e);
         onErrorRef.current?.(e);
