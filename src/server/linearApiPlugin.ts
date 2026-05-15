@@ -18,6 +18,11 @@ import {
   readViewBoard,
   writeViewBoard,
   deleteViewBoard,
+  readCustomManifest,
+  writeCustomManifest,
+  readCustomViewBoard,
+  writeCustomViewBoard,
+  deleteCustomViewBoard,
   assertSafeViewId,
   STORE_PATHS,
 } from "./boardStore.js";
@@ -105,6 +110,64 @@ export function linearApiPlugin(): Plugin {
           if (req.method === "DELETE") {
             try {
               await deleteViewBoard(viewId);
+              return sendJson(res, 200, { ok: true });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+        }
+
+        // Custom views manifest — same shape as Working On, no legacy migration.
+        // Must precede the per-view route below so `/views` isn't read as an id.
+        if (url === "/api/custom/views" || url?.split("?")[0] === "/api/custom/views") {
+          if (req.method === "GET") {
+            try {
+              const m = await readCustomManifest();
+              return sendJson(res, 200, m);
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "PUT") {
+            try {
+              const body = await readJson(req);
+              const saved = await writeCustomManifest(body);
+              return sendJson(res, 200, { ok: true, data: saved });
+            } catch (err) {
+              console.error(`[api] PUT /custom/views failed:`, err);
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+        }
+
+        const customViewMatch = /^\/api\/custom\/views\/([^/?#]+)/.exec(url);
+        if (customViewMatch) {
+          const viewId = decodeURIComponent(customViewMatch[1]!);
+          try {
+            assertSafeViewId(viewId);
+          } catch (err) {
+            return sendJson(res, 400, { ok: false, error: String(err) });
+          }
+          if (req.method === "GET") {
+            try {
+              const data = await readCustomViewBoard(viewId);
+              return sendJson(res, 200, data);
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "PUT") {
+            try {
+              const body = await readJson(req);
+              const saved = await writeCustomViewBoard(viewId, body);
+              return sendJson(res, 200, { ok: true, data: saved });
+            } catch (err) {
+              return sendJson(res, 500, { ok: false, error: String(err) });
+            }
+          }
+          if (req.method === "DELETE") {
+            try {
+              await deleteCustomViewBoard(viewId);
               return sendJson(res, 200, { ok: true });
             } catch (err) {
               return sendJson(res, 500, { ok: false, error: String(err) });

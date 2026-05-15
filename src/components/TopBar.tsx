@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
-export type ActiveView = "all" | "working_on";
+export type ActiveView = "all" | "working_on" | "custom";
 
 interface TopBarProps {
   lastSyncAt: string | null;
@@ -12,12 +12,16 @@ interface TopBarProps {
   totalCount?: number;
   activeView: ActiveView;
   onViewChange: (v: ActiveView) => void;
-  /** Optional label for the Working On tab (current view name). */
+  /** Label for the Working On tab (current day view name). */
   workingOnLabel?: string;
-  /** Click handler for the ▾ split button. The parent positions the dropdown using the rect handed back. */
+  /** Click handler for the Working On ▾ split button. */
   onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
-  /** Double-click on the Working On tab commits a new name for the active view. */
-  onRenameActiveWorkingOn?: (name: string) => void;
+  /** Label for the Custom tab (current custom view name). */
+  customLabel?: string;
+  /** Click handler for the Custom ▾ split button. */
+  onCustomExpand?: (anchor: { x: number; y: number; width: number }) => void;
+  /** Double-click on the Custom tab commits a new name for the active custom view. */
+  onRenameActiveCustom?: (name: string) => void;
   leftSlot?: React.ReactNode;
 }
 
@@ -32,7 +36,9 @@ export function TopBar({
   onViewChange,
   workingOnLabel,
   onWorkingOnExpand,
-  onRenameActiveWorkingOn,
+  customLabel,
+  onCustomExpand,
+  onRenameActiveCustom,
   leftSlot,
 }: TopBarProps) {
   return (
@@ -81,7 +87,9 @@ export function TopBar({
           onChange={onViewChange}
           workingOnLabel={workingOnLabel}
           onWorkingOnExpand={onWorkingOnExpand}
-          onRenameActiveWorkingOn={onRenameActiveWorkingOn}
+          customLabel={customLabel}
+          onCustomExpand={onCustomExpand}
+          onRenameActiveCustom={onRenameActiveCustom}
         />
         <TopBarMenu
           lastSyncAt={lastSyncAt}
@@ -99,38 +107,43 @@ function ViewSwitcher({
   onChange,
   workingOnLabel,
   onWorkingOnExpand,
-  onRenameActiveWorkingOn,
+  customLabel,
+  onCustomExpand,
+  onRenameActiveCustom,
 }: {
   value: ActiveView;
   onChange: (v: ActiveView) => void;
   workingOnLabel?: string;
   onWorkingOnExpand?: (anchor: { x: number; y: number; width: number }) => void;
-  onRenameActiveWorkingOn?: (name: string) => void;
+  customLabel?: string;
+  onCustomExpand?: (anchor: { x: number; y: number; width: number }) => void;
+  onRenameActiveCustom?: (name: string) => void;
 }) {
   const workingOnRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const customRef = useRef<HTMLDivElement | null>(null);
+  const customInputRef = useRef<HTMLInputElement | null>(null);
+  const [editingCustom, setEditingCustom] = useState(false);
+  const [customDraft, setCustomDraft] = useState("");
 
   useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+    if (editingCustom && customInputRef.current) {
+      customInputRef.current.focus();
+      customInputRef.current.select();
     }
-  }, [editing]);
+  }, [editingCustom]);
 
-  const commitRename = () => {
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== workingOnLabel && onRenameActiveWorkingOn) {
-      onRenameActiveWorkingOn(trimmed);
+  const commitCustomRename = () => {
+    const trimmed = customDraft.trim();
+    if (trimmed && trimmed !== customLabel && onRenameActiveCustom) {
+      onRenameActiveCustom(trimmed);
     }
-    setEditing(false);
-    setDraft("");
+    setEditingCustom(false);
+    setCustomDraft("");
   };
 
-  const cancelRename = () => {
-    setEditing(false);
-    setDraft("");
+  const cancelCustomRename = () => {
+    setEditingCustom(false);
+    setCustomDraft("");
   };
 
   return (
@@ -165,22 +178,8 @@ function ViewSwitcher({
         <button
           role="tab"
           aria-selected={value === "working_on"}
-          onClick={() => {
-            if (editing) return;
-            onChange("working_on");
-          }}
-          onDoubleClick={() => {
-            if (!onRenameActiveWorkingOn || !workingOnLabel) return;
-            setDraft(workingOnLabel);
-            setEditing(true);
-          }}
-          title={
-            editing
-              ? "Enter 提交 / Esc 取消"
-              : workingOnLabel
-                ? `Working On · ${workingOnLabel}（双击改名）`
-                : "Working On"
-          }
+          onClick={() => onChange("working_on")}
+          title={workingOnLabel ? `Working On · ${workingOnLabel}` : "Working On"}
           style={{
             ...tabBtnStyle(value === "working_on", false),
             background: "transparent",
@@ -193,26 +192,105 @@ function ViewSwitcher({
           }}
         >
           <span>Working On</span>
-          {editing ? (
+          {workingOnLabel && (
+            <span
+              style={{
+                fontWeight: 400,
+                opacity: 0.7,
+                textTransform: "none",
+                letterSpacing: 0,
+                fontSize: 10,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: 200,
+              }}
+            >
+              · {workingOnLabel}
+            </span>
+          )}
+        </button>
+        <button
+          aria-label="切换 Working On view"
+          title="切换 / 新建 Working On view"
+          onClick={() => {
+            const el = workingOnRef.current;
+            if (!el || !onWorkingOnExpand) return;
+            const rect = el.getBoundingClientRect();
+            onWorkingOnExpand({ x: rect.left, y: rect.bottom + 4, width: rect.width });
+          }}
+          style={{
+            ...tabBtnStyle(value === "working_on", true),
+            background: "transparent",
+            borderLeft: "1px solid var(--hairline)",
+            padding: "0 8px",
+            fontSize: 9,
+          }}
+        >
+          ▾
+        </button>
+      </div>
+      <div
+        ref={customRef}
+        role="group"
+        style={{
+          display: "inline-flex",
+          alignItems: "stretch",
+          borderLeft: "1px solid var(--hairline)",
+          background: value === "custom" ? "var(--paper-deep)" : "transparent",
+        }}
+      >
+        <button
+          role="tab"
+          aria-selected={value === "custom"}
+          onClick={() => {
+            if (editingCustom) return;
+            onChange("custom");
+          }}
+          onDoubleClick={() => {
+            if (!onRenameActiveCustom || !customLabel) return;
+            setCustomDraft(customLabel);
+            setEditingCustom(true);
+          }}
+          title={
+            editingCustom
+              ? "Enter 提交 / Esc 取消"
+              : customLabel
+                ? `Custom · ${customLabel}（双击改名）`
+                : "Custom"
+          }
+          style={{
+            ...tabBtnStyle(value === "custom", false),
+            background: "transparent",
+            borderLeft: "none",
+            paddingRight: 6,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            maxWidth: 280,
+          }}
+        >
+          <span>Custom</span>
+          {editingCustom ? (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               <span style={{ opacity: 0.5 }}>·</span>
               <input
-                ref={inputRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                ref={customInputRef}
+                value={customDraft}
+                onChange={(e) => setCustomDraft(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    commitRename();
+                    commitCustomRename();
                   } else if (e.key === "Escape") {
                     e.preventDefault();
-                    cancelRename();
+                    cancelCustomRename();
                   }
                   e.stopPropagation();
                 }}
-                onBlur={commitRename}
+                onBlur={commitCustomRename}
                 style={{
                   width: 160,
                   border: "1px solid var(--hairline)",
@@ -230,7 +308,7 @@ function ViewSwitcher({
               />
             </span>
           ) : (
-            workingOnLabel && (
+            customLabel && (
               <span
                 style={{
                   fontWeight: 400,
@@ -244,22 +322,22 @@ function ViewSwitcher({
                   maxWidth: 200,
                 }}
               >
-                · {workingOnLabel}
+                · {customLabel}
               </span>
             )
           )}
         </button>
         <button
-          aria-label="切换 Working On view"
-          title="切换 / 新建 Working On view"
+          aria-label="切换 Custom view"
+          title="切换 / 新建 Custom view"
           onClick={() => {
-            const el = workingOnRef.current;
-            if (!el || !onWorkingOnExpand) return;
+            const el = customRef.current;
+            if (!el || !onCustomExpand) return;
             const rect = el.getBoundingClientRect();
-            onWorkingOnExpand({ x: rect.left, y: rect.bottom + 4, width: rect.width });
+            onCustomExpand({ x: rect.left, y: rect.bottom + 4, width: rect.width });
           }}
           style={{
-            ...tabBtnStyle(value === "working_on", true),
+            ...tabBtnStyle(value === "custom", true),
             background: "transparent",
             borderLeft: "1px solid var(--hairline)",
             padding: "0 8px",

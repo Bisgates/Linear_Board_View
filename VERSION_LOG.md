@@ -2,6 +2,13 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.21.0 — 新增 Custom view 类别 + Day view 命名/改名规则更新
+  - **顶栏第三个 tab `Custom`**：与 Working On 并排，结构 mirror（split ▾ 按钮 + dropdown + create / pick / rename / delete + per-view IssuePicker），但 view 可任意命名；首次创建从 `Custom 1` 起步，被占就递增最小未用编号。
+  - **Day view 命名格式改为 `YYYY-MM-DD WW.D`**：`WW = floor((dayOfYear-1)/7)+1`（Jan 1 落 week 1），`D = Date.getDay()`（周日=0），例如 2026-05-15（周四）→ `2026-05-15 20.4`。client `formatDefaultViewName` + server-side legacy migration 同步换实现。
+  - **Day view 禁止 rename**：TopBar 的 Working On tab 不再有双击改名，dropdown 内 day kind 也屏蔽双击 → 编辑态，create 按钮文案改成 `+ 新建 day view`；custom kind 保留 rename + `+ 新建 custom view`。
+  - **后端**：`/api/custom/views` (GET/PUT) + `/api/custom/views/:id` (GET/PUT/DELETE)，存储到 `public/data/custom/<id>.json` + `public/data/custom/views.json`；boardStore 把 manifest / view-board / delete 逻辑抽成 `*At(dir, …)` helper，day 保留 legacy `working_on.json` migration，custom 无 legacy 路径。
+  - **前端**：`workingOnViews.ts` 抽出 `createViewsClient`，导出 `dayViewsClient` / `customViewsClient` + `nextCustomName`；`useWorkingOnViews` 拆成通用 `useViewsList`，导出 `useWorkingOnViews` + `useCustomViews`。App 加 `customBoard` state、`customDisplayed` / `customIds`、`addToCustom`、`handleCreateCustom` / `handlePickCustom` / `handleRenameActiveCustom`，以及对应 cardId 迁移 effect。
+
 - v0.20.0 — Mindmap tidy 快捷键 + 干净 edge 路由
   - **F = 整理选中卡片所在 subtree**：focused card 本身钉住，仅其后代按 d3-hierarchy Reingold-Tilford 重排（左→右展开）。原 `findRoot` 爬到全局 root 的语义砍掉——深单 root 树里点叶子按 F 会拽动整画布的反直觉行为没了。没 focus 时 toast 提示 "请先选中一张卡片…" 然后 no-op。
   - **Shift+F = 整理全画布**：每个 root 各跑一次 tidySubtree，按当前 Y 排序后用累计 cursorY 把 bbox 顺序堆叠，相邻 root 间留 `rootGapY = 100` 的 gap，跨 root 不交叉。

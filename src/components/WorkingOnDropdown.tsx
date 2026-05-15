@@ -11,6 +11,12 @@ interface Props {
   onClose: () => void;
   /** Top-left anchor in viewport coords; component positions itself just below. */
   anchor: { x: number; y: number; width: number };
+  /**
+   * Determines the create-button copy and whether rows can be renamed inline.
+   * Day views derive their names from the date and aren't user-renameable;
+   * Custom views are free-form.
+   */
+  kind?: "day" | "custom";
 }
 
 export function WorkingOnDropdown({
@@ -22,7 +28,10 @@ export function WorkingOnDropdown({
   onDelete,
   onClose,
   anchor,
+  kind = "day",
 }: Props) {
+  const allowRename = kind === "custom";
+  const createLabel = kind === "custom" ? "+ 新建 custom view" : "+ 新建 day view";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -102,6 +111,7 @@ export function WorkingOnDropdown({
                 onClose();
               }}
               onDoubleClick={(evt) => {
+                if (!allowRename) return;
                 evt.stopPropagation();
                 setEditingId(v.id);
                 setDraft(v.name);
@@ -242,7 +252,7 @@ export function WorkingOnDropdown({
         onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-deep)")}
         onMouseLeave={(e) => (e.currentTarget.style.background = "var(--paper-soft)")}
       >
-        + 新建 working on
+        {createLabel}
       </button>
     </div>
   );

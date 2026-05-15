@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  VIEWS_ENDPOINT,
-  deleteViewBoard,
+  customViewsClient,
+  dayViewsClient,
   formatDefaultViewName,
-  loadManifest,
-  saveManifest,
+  nextCustomName,
   uniqueName,
-  viewBoardEndpoint,
   type ViewMeta,
+  type ViewsClient,
   type ViewsManifest,
 } from "./workingOnViews";
-import { saveBoardData } from "./workingOn";
-import { shortId } from "./workingOn";
+import { saveBoardData, shortId } from "./workingOn";
 
-export interface UseWorkingOnViews {
+export interface UseViewsList {
   manifest: ViewsManifest | null;
   loaded: boolean;
   activeId: string | null;
@@ -24,23 +22,37 @@ export interface UseWorkingOnViews {
   deleteView: (id: string) => Promise<void>;
 }
 
-export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnViews {
+/**
+ * Generic views-list state hook. Used by both Working On (day) and Custom.
+ * `defaultName` decides what a freshly created view is called when the caller
+ * doesn't pass an explicit name; `idPrefix` namespaces the short ids per kind
+ * so backend logs stay readable.
+ */
+export function useViewsList(
+  client: ViewsClient,
+  opts: {
+    defaultName: (existing: string[]) => string;
+    idPrefix: string;
+  },
+  onError?: (e: unknown) => void,
+): UseViewsList {
   const [manifest, setManifest] = useState<ViewsManifest | null>(null);
   const [loaded, setLoaded] = useState(false);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const defaultNameRef = useRef(opts.defaultName);
+  defaultNameRef.current = opts.defaultName;
+  const idPrefix = opts.idPrefix;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const m = await loadManifest();
+        const m = await client.loadManifest();
         if (cancelled) return;
         // Boot override — open the most-recently-created view regardless of
-        // what was persisted as `activeId`. The on-disk activeId is left
-        // untouched; setActiveId persists the user's intra-session choice
-        // but the next boot still defaults to the latest view (matches the
-        // user's "create-a-view-per-day, default to today" workflow).
+        // what was persisted as `activeId`. Matches "create one per session,
+        // default to the freshest" workflow for both kinds.
         const latest =
           m.views.length > 0
             ? [...m.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!
@@ -49,7 +61,7 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
         setManifest(boot);
         setLoaded(true);
       } catch (e) {
-        console.error(`[useWorkingOnViews] load failed`, e);
+        console.error(`[useViewsList ${client.manifestEndpoint}] load failed`, e);
         onErrorRef.current?.(e);
         if (!cancelled) setLoaded(true);
       }
@@ -57,49 +69,55 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client]);
 
-  const persist = useCallback(async (next: ViewsManifest): Promise<ViewsManifest | null> => {
-    try {
-      const saved = await saveManifest(next);
-      setManifest(saved);
-      return saved;
-    } catch (e) {
-      console.error(`[useWorkingOnViews] save failed`, e);
-      onErrorRef.current?.(e);
-      return null;
-    }
-  }, []);
+  const persist = useCallback(
+    async (next: ViewsManifest): Promise<ViewsManifest | null> => {
+      try {
+        const saved = await client.saveManifest(next);
+        setManifest(saved);
+        return saved;
+      } catch (e) {
+        console.error(`[useViewsList ${client.manifestEndpoint}] save failed`, e);
+        onErrorRef.current?.(e);
+        return null;
+      }
+    },
+    [client],
+  );
 
   const setActiveId = useCallback(
     (id: string) => {
-      // Read current state outside the updater — side effects inside React
-      // setState updaters get double-invoked in StrictMode and are an anti-pattern.
       const current = manifest;
       if (!current || !current.views.some((v) => v.id === id) || current.activeId === id) return;
       const next: ViewsManifest = { ...current, activeId: id };
       setManifest(next);
-      saveManifest(next).catch((e) => {
-        console.error(`[useWorkingOnViews] setActive save failed`, e);
+      client.saveManifest(next).catch((e) => {
+        console.error(`[useViewsList ${client.manifestEndpoint}] setActive save failed`, e);
         onErrorRef.current?.(e);
       });
     },
-    [manifest],
+    [manifest, client],
   );
 
   const createView = useCallback(
     async (name?: string): Promise<string | null> => {
       const current = manifest;
       if (!current) return null;
-      const id = shortId("wov");
-      const desired = name?.trim() || formatDefaultViewName();
-      const finalName = uniqueName(desired, current.views.map((v) => v.name));
+      const id = shortId(idPrefix);
+      const existingNames = current.views.map((v) => v.name);
+      const desired = name?.trim() || defaultNameRef.current(existingNames);
+      const finalName = uniqueName(desired, existingNames);
       const meta: ViewMeta = { id, name: finalName, createdAt: new Date().toISOString() };
-      // Create empty board first so the GET after activation doesn't 404.
       try {
-        await saveBoardData(viewBoardEndpoint(id), { issueMembers: {}, noteNodes: [], edges: [], groups: [] });
+        await saveBoardData(client.boardEndpointFor(id), {
+          issueMembers: {},
+          noteNodes: [],
+          edges: [],
+          groups: [],
+        });
       } catch (e) {
-        console.error(`[useWorkingOnViews] create board failed`, e);
+        console.error(`[useViewsList ${client.manifestEndpoint}] create board failed`, e);
         onErrorRef.current?.(e);
         return null;
       }
@@ -110,7 +128,7 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
       const saved = await persist(next);
       return saved ? id : null;
     },
-    [manifest, persist],
+    [manifest, persist, client, idPrefix],
   );
 
   const renameView = useCallback(
@@ -134,28 +152,24 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
     async (id: string): Promise<void> => {
       const current = manifest;
       if (!current) return;
-      if (current.views.length <= 1) return; // UI also gates, but defend.
+      if (current.views.length <= 1) return;
       const remaining = current.views.filter((v) => v.id !== id);
       const newActive = current.activeId === id ? remaining[0]!.id : current.activeId;
       const next: ViewsManifest = { views: remaining, activeId: newActive };
       const saved = await persist(next);
       if (saved) {
         try {
-          await deleteViewBoard(id);
+          await client.deleteViewBoard(id);
         } catch (e) {
-          console.warn(`[useWorkingOnViews] board file delete failed (manifest already updated)`, e);
+          console.warn(`[useViewsList ${client.manifestEndpoint}] board file delete failed (manifest already updated)`, e);
         }
       }
     },
-    [manifest, persist],
+    [manifest, persist, client],
   );
 
   const activeId = manifest?.activeId ?? null;
-  const boardEndpoint = activeId ? viewBoardEndpoint(activeId) : null;
-
-  // Reading VIEWS_ENDPOINT keeps the import non-orphaned and lets dev tools
-  // verify the path constant is in use.
-  void VIEWS_ENDPOINT;
+  const boardEndpoint = activeId ? client.boardEndpointFor(activeId) : null;
 
   return {
     manifest,
@@ -167,4 +181,22 @@ export function useWorkingOnViews(onError?: (e: unknown) => void): UseWorkingOnV
     renameView,
     deleteView,
   };
+}
+
+export type UseWorkingOnViews = UseViewsList;
+
+export function useWorkingOnViews(onError?: (e: unknown) => void): UseViewsList {
+  return useViewsList(
+    dayViewsClient,
+    { defaultName: () => formatDefaultViewName(), idPrefix: "wov" },
+    onError,
+  );
+}
+
+export function useCustomViews(onError?: (e: unknown) => void): UseViewsList {
+  return useViewsList(
+    customViewsClient,
+    { defaultName: (existing) => nextCustomName(existing), idPrefix: "cv" },
+    onError,
+  );
 }

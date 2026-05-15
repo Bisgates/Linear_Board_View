@@ -11,7 +11,7 @@ import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
-import { useWorkingOnViews } from "./lib/useWorkingOnViews";
+import { useCustomViews, useWorkingOnViews } from "./lib/useWorkingOnViews";
 import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
 import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
@@ -65,10 +65,14 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [activeView, setActiveView] = useState<ActiveView>("working_on");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [dropdownAnchor, setDropdownAnchor] = useState<{ x: number; y: number; width: number } | null>(null);
+  const [dropdownAnchor, setDropdownAnchor] = useState<
+    | { kind: "day" | "custom"; x: number; y: number; width: number }
+    | null
+  >(null);
   const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
   const workingOnBoardRef = useRef<CanvasBoardHandle | null>(null);
   const allIssuesBoardRef = useRef<CanvasBoardHandle | null>(null);
+  const customBoardRef = useRef<CanvasBoardHandle | null>(null);
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -81,6 +85,10 @@ export default function App() {
   const wov = useWorkingOnViews((e) => pushToast("error", `Views save failed: ${String(e)}`));
   const workingOn = useBoardState(wov.boardEndpoint, (e) =>
     pushToast("error", `Working-on save failed: ${String(e)}`),
+  );
+  const cv = useCustomViews((e) => pushToast("error", `Custom views save failed: ${String(e)}`));
+  const customBoard = useBoardState(cv.boardEndpoint, (e) =>
+    pushToast("error", `Custom save failed: ${String(e)}`),
   );
   const allIssuesBoard = useAllIssuesBoardState((e) =>
     pushToast("error", `All-issues board save failed: ${String(e)}`),
@@ -126,6 +134,17 @@ export default function App() {
       return { ...prev, noteNodes: result.next };
     });
   }, [allIssuesBoard.loaded, allIssuesBoard.data.noteNodes, allIssuesBoard.setData]);
+
+  useEffect(() => {
+    if (!customBoard.loaded) return;
+    if (!customBoard.data.noteNodes.some((n) => !n.cardId)) return;
+    customBoard.setData((prev) => {
+      const result = migrateCardIds(prev.noteNodes);
+      if (result.next === prev.noteNodes) return prev;
+      console.log(`[card-id] minted ${result.minted} cardIds (custom)`);
+      return { ...prev, noteNodes: result.next };
+    });
+  }, [customBoard.loaded, customBoard.data.noteNodes, customBoard.setData]);
 
   const refresh = useCallback(async () => {
     setSyncing(true);
@@ -255,6 +274,7 @@ export default function App() {
   );
 
   const workingOnIds = useMemo(() => new Set(Object.keys(workingOn.data.issueMembers)), [workingOn.data.issueMembers]);
+  const customIds = useMemo(() => new Set(Object.keys(customBoard.data.issueMembers)), [customBoard.data.issueMembers]);
 
   // Working On displays only explicit members of the snapshot; keep insertion
   // order of issueMembers so newly-added issues land next to where the picker
@@ -267,6 +287,15 @@ export default function App() {
     }
     return out;
   }, [workingOn.data.issueMembers, issuesById]);
+
+  const customDisplayed = useMemo(() => {
+    const out: IssueRecord[] = [];
+    for (const id of Object.keys(customBoard.data.issueMembers)) {
+      const iss = issuesById.get(id);
+      if (iss) out.push(iss);
+    }
+    return out;
+  }, [customBoard.data.issueMembers, issuesById]);
 
   // Auto-layout computes per-team / per-project grid coordinates and is used
   // as the fallback whenever an issue has no stored position yet. Computed
@@ -292,7 +321,27 @@ export default function App() {
     [workingOn],
   );
 
-  const displayCount = activeView === "all" ? filtered.length : workingOnIds.size;
+  const addToCustom = useCallback(
+    (issueId: string) => {
+      const center = customBoardRef.current?.getViewportCenter() ?? { x: 0, y: 0 };
+      customBoard.setData((prev) => {
+        if (prev.issueMembers[issueId]) return prev;
+        const taken: { x: number; y: number }[] = [];
+        for (const p of Object.values(prev.issueMembers)) taken.push(p);
+        for (const n of prev.noteNodes) taken.push({ x: n.x, y: n.y });
+        const slot = findNextSlotNear(center, taken);
+        return { ...prev, issueMembers: { ...prev.issueMembers, [issueId]: slot } };
+      });
+    },
+    [customBoard],
+  );
+
+  const displayCount =
+    activeView === "all"
+      ? filtered.length
+      : activeView === "custom"
+        ? customIds.size
+        : workingOnIds.size;
   const displayTotal = activeView === "all" ? allIssues.length : undefined;
 
   const activeViewName = useMemo(() => {
@@ -300,11 +349,16 @@ export default function App() {
     return wov.manifest.views.find((v) => v.id === wov.activeId)?.name;
   }, [wov.manifest, wov.activeId]);
 
+  const customViewName = useMemo(() => {
+    if (!cv.manifest || !cv.activeId) return undefined;
+    return cv.manifest.views.find((v) => v.id === cv.activeId)?.name;
+  }, [cv.manifest, cv.activeId]);
+
   const handleCreate = useCallback(async () => {
     const newId = await wov.createView();
     if (newId) {
       setActiveView("working_on");
-      pushToast("success", `已创建 view`);
+      pushToast("success", `已创建 day view`);
     }
   }, [wov, pushToast]);
 
@@ -316,12 +370,28 @@ export default function App() {
     [wov],
   );
 
-  const handleRenameActive = useCallback(
-    (name: string) => {
-      if (!wov.activeId) return;
-      void wov.renameView(wov.activeId, name);
+  const handleCreateCustom = useCallback(async () => {
+    const newId = await cv.createView();
+    if (newId) {
+      setActiveView("custom");
+      pushToast("success", `已创建 custom view`);
+    }
+  }, [cv, pushToast]);
+
+  const handlePickCustom = useCallback(
+    (id: string) => {
+      cv.setActiveId(id);
+      setActiveView("custom");
     },
-    [wov],
+    [cv],
+  );
+
+  const handleRenameActiveCustom = useCallback(
+    (name: string) => {
+      if (!cv.activeId) return;
+      void cv.renameView(cv.activeId, name);
+    },
+    [cv],
   );
 
   // Dropdown lists views newest-first (by createdAt). Manifest order on disk
@@ -330,6 +400,11 @@ export default function App() {
     if (!wov.manifest) return [];
     return [...wov.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [wov.manifest]);
+
+  const sortedCustomViews = useMemo(() => {
+    if (!cv.manifest) return [];
+    return [...cv.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [cv.manifest]);
 
   return (
     <div
@@ -350,15 +425,19 @@ export default function App() {
         activeView={activeView}
         onViewChange={setActiveView}
         workingOnLabel={activeViewName}
-        onWorkingOnExpand={(a) => setDropdownAnchor(a)}
-        onRenameActiveWorkingOn={handleRenameActive}
+        onWorkingOnExpand={(a) => setDropdownAnchor({ kind: "day", ...a })}
+        customLabel={customViewName}
+        onCustomExpand={(a) => setDropdownAnchor({ kind: "custom", ...a })}
+        onRenameActiveCustom={handleRenameActiveCustom}
         leftSlot={
           activeView === "working_on" ? (
             <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
+          ) : activeView === "custom" ? (
+            <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
           ) : null
         }
       />
-      {dropdownAnchor && wov.manifest && (
+      {dropdownAnchor?.kind === "day" && wov.manifest && (
         <WorkingOnDropdown
           views={sortedViews}
           activeId={wov.activeId}
@@ -368,6 +447,20 @@ export default function App() {
           onDelete={wov.deleteView}
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
+          kind="day"
+        />
+      )}
+      {dropdownAnchor?.kind === "custom" && cv.manifest && (
+        <WorkingOnDropdown
+          views={sortedCustomViews}
+          activeId={cv.activeId}
+          onPick={handlePickCustom}
+          onCreate={handleCreateCustom}
+          onRename={cv.renameView}
+          onDelete={cv.deleteView}
+          onClose={() => setDropdownAnchor(null)}
+          anchor={dropdownAnchor}
+          kind="custom"
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -391,6 +484,23 @@ export default function App() {
               redo={allIssuesBoard.redo}
               initialPositions={allIssuesInitialPositions}
               loadingLabel="loading all_issues_board…"
+              onSelectIssue={setSelectedId}
+              selectedIssueId={selectedId}
+              clipboard={clipboard}
+              setClipboard={setClipboard}
+              onClipboardToast={pushToast}
+            />
+          ) : activeView === "custom" ? (
+            <CanvasBoard
+              ref={customBoardRef}
+              viewKey={cv.activeId ? `cv-${cv.activeId}` : "cv-loading"}
+              displayedIssues={customDisplayed}
+              data={customBoard.data}
+              loaded={customBoard.loaded}
+              setData={customBoard.setData}
+              undo={customBoard.undo}
+              redo={customBoard.redo}
+              loadingLabel={`loading ${customViewName ?? "custom"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
               clipboard={clipboard}

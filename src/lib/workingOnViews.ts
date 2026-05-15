@@ -9,58 +9,105 @@ export interface ViewsManifest {
   activeId: string;
 }
 
+export interface ViewsClient {
+  manifestEndpoint: string;
+  boardEndpointFor: (id: string) => string;
+  loadManifest: () => Promise<ViewsManifest>;
+  saveManifest: (m: ViewsManifest) => Promise<ViewsManifest>;
+  deleteViewBoard: (id: string) => Promise<void>;
+}
+
+export function createViewsClient(opts: {
+  manifestEndpoint: string;
+  boardEndpointFor: (id: string) => string;
+}): ViewsClient {
+  const { manifestEndpoint, boardEndpointFor } = opts;
+  return {
+    manifestEndpoint,
+    boardEndpointFor,
+    async loadManifest(): Promise<ViewsManifest> {
+      const res = await fetch(manifestEndpoint, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`load manifest failed: ${res.status}`);
+      return (await res.json()) as ViewsManifest;
+    },
+    async saveManifest(m: ViewsManifest): Promise<ViewsManifest> {
+      const res = await fetch(manifestEndpoint, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(m),
+      });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const text = await res.text();
+          const parsed = JSON.parse(text) as { error?: unknown };
+          detail = typeof parsed.error === "string" ? `: ${parsed.error}` : `: ${text}`;
+        } catch {
+          /* non-json body, ignore */
+        }
+        throw new Error(`save manifest failed: ${res.status}${detail}`);
+      }
+      const json = (await res.json()) as { ok: boolean; data?: ViewsManifest; error?: string };
+      if (!json.ok || !json.data) throw new Error(json.error ?? "save manifest: bad response");
+      return json.data;
+    },
+    async deleteViewBoard(id: string): Promise<void> {
+      const res = await fetch(boardEndpointFor(id), { method: "DELETE" });
+      if (!res.ok) throw new Error(`delete view ${id} failed: ${res.status}`);
+    },
+  };
+}
+
+// --- Day (Working On) client — keeps the legacy module-level exports so
+// existing callers stay untouched. ---
+
 export const VIEWS_ENDPOINT = "/api/working-on/views";
 
 export function viewBoardEndpoint(id: string): string {
   return `/api/working-on/views/${encodeURIComponent(id)}`;
 }
 
-export async function loadManifest(): Promise<ViewsManifest> {
-  const res = await fetch(VIEWS_ENDPOINT, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`load manifest failed: ${res.status}`);
-  return (await res.json()) as ViewsManifest;
+export const dayViewsClient: ViewsClient = createViewsClient({
+  manifestEndpoint: VIEWS_ENDPOINT,
+  boardEndpointFor: viewBoardEndpoint,
+});
+
+export const loadManifest = () => dayViewsClient.loadManifest();
+export const saveManifest = (m: ViewsManifest) => dayViewsClient.saveManifest(m);
+export const deleteViewBoard = (id: string) => dayViewsClient.deleteViewBoard(id);
+
+// --- Custom client ---
+
+export const CUSTOM_VIEWS_ENDPOINT = "/api/custom/views";
+
+export function customViewBoardEndpoint(id: string): string {
+  return `/api/custom/views/${encodeURIComponent(id)}`;
 }
 
-export async function saveManifest(m: ViewsManifest): Promise<ViewsManifest> {
-  const res = await fetch(VIEWS_ENDPOINT, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(m),
-  });
-  if (!res.ok) {
-    // Try to surface the server-side error body, not just the status code.
-    let detail = "";
-    try {
-      const text = await res.text();
-      const parsed = JSON.parse(text) as { error?: unknown };
-      detail = typeof parsed.error === "string" ? `: ${parsed.error}` : `: ${text}`;
-    } catch {
-      /* non-json body, ignore */
-    }
-    throw new Error(`save manifest failed: ${res.status}${detail}`);
-  }
-  const json = (await res.json()) as { ok: boolean; data?: ViewsManifest; error?: string };
-  if (!json.ok || !json.data) throw new Error(json.error ?? "save manifest: bad response");
-  return json.data;
-}
+export const customViewsClient: ViewsClient = createViewsClient({
+  manifestEndpoint: CUSTOM_VIEWS_ENDPOINT,
+  boardEndpointFor: customViewBoardEndpoint,
+});
 
-export async function deleteViewBoard(id: string): Promise<void> {
-  const res = await fetch(viewBoardEndpoint(id), { method: "DELETE" });
-  if (!res.ok) throw new Error(`delete view ${id} failed: ${res.status}`);
-}
+// --- Naming ---
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+function dayOfYear(d: Date): number {
+  const start = new Date(d.getFullYear(), 0, 1);
+  const diff = (d.getTime() - start.getTime()) / 86400000;
+  return Math.floor(diff) + 1;
+}
 
-/** Returns names like `2026-05-14 周四`. */
+/** Returns names like `2026-05-15 20.4` — date plus `<weekOfYear>.<weekday>`. */
 export function formatDefaultViewName(d: Date = new Date()): string {
   const yyyy = d.getFullYear();
   const mm = pad2(d.getMonth() + 1);
   const dd = pad2(d.getDate());
-  return `${yyyy}-${mm}-${dd} ${WEEKDAYS[d.getDay()]}`;
+  const w = Math.floor((dayOfYear(d) - 1) / 7) + 1;
+  return `${yyyy}-${mm}-${dd} ${w}.${d.getDay()}`;
 }
 
 /** Append `(2)`, `(3)`… until the name is not in `taken`. */
@@ -72,4 +119,18 @@ export function uniqueName(base: string, taken: Iterable<string>): string {
     if (!set.has(candidate)) return candidate;
   }
   return `${base} (${Date.now()})`;
+}
+
+/**
+ * Pick the smallest `Custom N` not already taken. Unlike `uniqueName`, this
+ * returns `Custom 1` first, not `Custom (2)` — Custom views start their own
+ * counter rather than disambiguating a shared base.
+ */
+export function nextCustomName(taken: Iterable<string>): string {
+  const set = new Set(taken);
+  for (let i = 1; i < 999; i += 1) {
+    const candidate = `Custom ${i}`;
+    if (!set.has(candidate)) return candidate;
+  }
+  return `Custom ${Date.now()}`;
 }

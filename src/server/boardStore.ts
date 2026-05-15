@@ -9,6 +9,8 @@ const DATA_DIR = resolve(__dirname, "..", "..", "public", "data");
 const WORKING_ON_DIR = resolve(DATA_DIR, "working_on");
 const VIEWS_MANIFEST = resolve(WORKING_ON_DIR, "views.json");
 const LEGACY_WORKING_ON = resolve(DATA_DIR, "working_on.json");
+const CUSTOM_DIR = resolve(DATA_DIR, "custom");
+const CUSTOM_VIEWS_MANIFEST = resolve(CUSTOM_DIR, "views.json");
 
 export interface NoteImage {
   id: string;
@@ -42,6 +44,8 @@ export const STORE_PATHS = {
   workingOnDir: WORKING_ON_DIR,
   viewsManifest: VIEWS_MANIFEST,
   legacyWorkingOn: LEGACY_WORKING_ON,
+  customDir: CUSTOM_DIR,
+  customViewsManifest: CUSTOM_VIEWS_MANIFEST,
   allIssuesBoard: resolve(DATA_DIR, "all_issues_board.json"),
 } as const;
 
@@ -220,29 +224,43 @@ export function assertSafeViewId(id: string): void {
   if (!ID_RE.test(id)) throw new Error(`invalid viewId: ${JSON.stringify(id)}`);
 }
 
-export function viewBoardPath(id: string): string {
+export function viewBoardPathAt(dir: string, id: string): string {
   assertSafeViewId(id);
-  return join(WORKING_ON_DIR, `${id}.json`);
+  return join(dir, `${id}.json`);
 }
 
-// Match the client's shortId("wov") shape but generated server-side for migration.
-function newViewId(): string {
+export function viewBoardPath(id: string): string {
+  return viewBoardPathAt(WORKING_ON_DIR, id);
+}
+
+export function customViewBoardPath(id: string): string {
+  return viewBoardPathAt(CUSTOM_DIR, id);
+}
+
+// Match the client's shortId shape but generated server-side for migration.
+function newViewId(prefix = "wov"): string {
   const t = Date.now().toString(36).slice(-4);
   const r = Math.random().toString(36).slice(2, 8);
-  return `wov_${t}${r}`;
+  return `${prefix}_${t}${r}`;
 }
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-/** `2026-05-14 周四` — server-side mirror of the client formatter. */
+function dayOfYear(d: Date): number {
+  const start = new Date(d.getFullYear(), 0, 1);
+  const diff = (d.getTime() - start.getTime()) / 86400000;
+  return Math.floor(diff) + 1;
+}
+
+/** `2026-05-15 20.4` — server-side mirror of the client formatter. */
 function formatDefaultViewName(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = pad2(d.getMonth() + 1);
   const dd = pad2(d.getDate());
-  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-  return `${yyyy}-${mm}-${dd} ${weekdays[d.getDay()]}`;
+  const w = Math.floor((dayOfYear(d) - 1) / 7) + 1;
+  return `${yyyy}-${mm}-${dd} ${w}.${d.getDay()}`;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -278,15 +296,24 @@ function validateManifest(raw: unknown): ViewsManifest | null {
   return { views, activeId };
 }
 
+interface ManifestSlot {
+  dir: string;
+  manifestPath: string;
+  idPrefix: string;
+  defaultName: (existing: string[]) => string;
+}
+
 /**
- * Read the manifest; on first run or missing manifest, run a one-shot migration:
- * - if the legacy `public/data/working_on.json` exists, adopt it as the first view
- *   (named by its mtime); on success, delete the legacy file.
- * - otherwise, create one empty view with today's default name.
+ * Generic read/init for a manifest slot. `legacyMigrate` runs once on the
+ * first call when the manifest is missing — pass `null` for kinds (like
+ * Custom) that have no legacy file to absorb.
  */
-export async function readManifest(): Promise<ViewsManifest> {
+async function readManifestAt(
+  slot: ManifestSlot,
+  legacyMigrate: (() => Promise<ViewsManifest | null>) | null,
+): Promise<ViewsManifest> {
   try {
-    const raw = await readFile(VIEWS_MANIFEST, "utf8");
+    const raw = await readFile(slot.manifestPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     const m = validateManifest(parsed);
     if (m) return m;
@@ -295,75 +322,143 @@ export async function readManifest(): Promise<ViewsManifest> {
     if (code !== "ENOENT") throw err;
   }
 
-  // First run — migrate or initialize.
-  await mkdir(WORKING_ON_DIR, { recursive: true });
+  await mkdir(slot.dir, { recursive: true });
 
-  if (await fileExists(LEGACY_WORKING_ON)) {
-    try {
-      const raw = await readFile(LEGACY_WORKING_ON, "utf8");
-      const legacyBoard = validate(JSON.parse(raw) as unknown);
-      const st = await stat(LEGACY_WORKING_ON);
-      const id = newViewId();
-      const name = formatDefaultViewName(new Date(st.mtimeMs));
-      const targetPath = viewBoardPath(id);
-      // Write new view first; only delete the legacy file once the new write is durable.
-      await atomicWriteJson(targetPath, legacyBoard);
-      await atomicWriteJson(VIEWS_MANIFEST, {
-        views: [{ id, name, createdAt: new Date(st.mtimeMs).toISOString() }],
-        activeId: id,
-      });
-      // Validate roundtrip before deleting source.
-      const roundtrip = await readFile(targetPath, "utf8");
-      validate(JSON.parse(roundtrip) as unknown);
-      await unlink(LEGACY_WORKING_ON);
-      console.log(`[boardStore] migrated working_on.json → views/${id}.json (${name})`);
-    } catch (err) {
-      console.warn(`[boardStore] legacy migration failed; legacy file kept:`, err);
-      // Fall through to fresh-init below.
-    }
+  if (legacyMigrate) {
+    const migrated = await legacyMigrate();
+    if (migrated) return migrated;
   }
 
-  // Read back after potential migration, otherwise create empty.
-  try {
-    const raw = await readFile(VIEWS_MANIFEST, "utf8");
-    const m = validateManifest(JSON.parse(raw) as unknown);
-    if (m) return m;
-  } catch {
-    /* fall through */
-  }
-
-  const id = newViewId();
+  // Fresh init.
+  const id = newViewId(slot.idPrefix);
   const m: ViewsManifest = {
-    views: [{ id, name: formatDefaultViewName(new Date()), createdAt: new Date().toISOString() }],
+    views: [{ id, name: slot.defaultName([]), createdAt: new Date().toISOString() }],
     activeId: id,
   };
-  await atomicWriteJson(viewBoardPath(id), { ...EMPTY });
-  await atomicWriteJson(VIEWS_MANIFEST, m);
+  await atomicWriteJson(viewBoardPathAt(slot.dir, id), { ...EMPTY });
+  await atomicWriteJson(slot.manifestPath, m);
   return m;
 }
 
-export async function writeManifest(raw: unknown): Promise<ViewsManifest> {
+async function writeManifestAt(slot: ManifestSlot, raw: unknown): Promise<ViewsManifest> {
   const m = validateManifest(raw);
   if (!m) throw new Error("invalid manifest payload");
   if (m.views.length === 0) throw new Error("manifest must contain at least one view");
-  await atomicWriteJson(VIEWS_MANIFEST, m);
+  await mkdir(slot.dir, { recursive: true });
+  await atomicWriteJson(slot.manifestPath, m);
   return m;
 }
 
-export async function readViewBoard(id: string): Promise<BoardData> {
-  return readBoard(viewBoardPath(id));
+async function readViewBoardAt(dir: string, id: string): Promise<BoardData> {
+  return readBoard(viewBoardPathAt(dir, id));
 }
 
-export async function writeViewBoard(id: string, data: unknown): Promise<BoardData> {
-  return writeBoard(viewBoardPath(id), data);
+async function writeViewBoardAt(dir: string, id: string, data: unknown): Promise<BoardData> {
+  return writeBoard(viewBoardPathAt(dir, id), data);
 }
 
-export async function deleteViewBoard(id: string): Promise<void> {
-  const p = viewBoardPath(id);
+async function deleteViewBoardAt(dir: string, id: string): Promise<void> {
+  const p = viewBoardPathAt(dir, id);
   try {
     await unlink(p);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") throw err;
   }
+}
+
+const DAY_SLOT: ManifestSlot = {
+  dir: WORKING_ON_DIR,
+  manifestPath: VIEWS_MANIFEST,
+  idPrefix: "wov",
+  defaultName: () => formatDefaultViewName(new Date()),
+};
+
+const CUSTOM_SLOT: ManifestSlot = {
+  dir: CUSTOM_DIR,
+  manifestPath: CUSTOM_VIEWS_MANIFEST,
+  idPrefix: "cv",
+  defaultName: (existing) => nextCustomName(existing),
+};
+
+function nextCustomName(existing: string[]): string {
+  const set = new Set(existing);
+  for (let i = 1; i < 999; i += 1) {
+    const candidate = `Custom ${i}`;
+    if (!set.has(candidate)) return candidate;
+  }
+  return `Custom ${Date.now()}`;
+}
+
+async function dayLegacyMigrate(): Promise<ViewsManifest | null> {
+  if (!(await fileExists(LEGACY_WORKING_ON))) return null;
+  try {
+    const raw = await readFile(LEGACY_WORKING_ON, "utf8");
+    const legacyBoard = validate(JSON.parse(raw) as unknown);
+    const st = await stat(LEGACY_WORKING_ON);
+    const id = newViewId("wov");
+    const name = formatDefaultViewName(new Date(st.mtimeMs));
+    const targetPath = viewBoardPath(id);
+    await atomicWriteJson(targetPath, legacyBoard);
+    const m: ViewsManifest = {
+      views: [{ id, name, createdAt: new Date(st.mtimeMs).toISOString() }],
+      activeId: id,
+    };
+    await atomicWriteJson(VIEWS_MANIFEST, m);
+    const roundtrip = await readFile(targetPath, "utf8");
+    validate(JSON.parse(roundtrip) as unknown);
+    await unlink(LEGACY_WORKING_ON);
+    console.log(`[boardStore] migrated working_on.json → views/${id}.json (${name})`);
+    return m;
+  } catch (err) {
+    console.warn(`[boardStore] legacy migration failed; legacy file kept:`, err);
+    return null;
+  }
+}
+
+/**
+ * Read the day (Working On) manifest; on first run, migrate
+ * `public/data/working_on.json` if it exists, otherwise create one empty view
+ * named with today's default.
+ */
+export async function readManifest(): Promise<ViewsManifest> {
+  return readManifestAt(DAY_SLOT, dayLegacyMigrate);
+}
+
+export async function writeManifest(raw: unknown): Promise<ViewsManifest> {
+  return writeManifestAt(DAY_SLOT, raw);
+}
+
+export async function readViewBoard(id: string): Promise<BoardData> {
+  return readViewBoardAt(WORKING_ON_DIR, id);
+}
+
+export async function writeViewBoard(id: string, data: unknown): Promise<BoardData> {
+  return writeViewBoardAt(WORKING_ON_DIR, id, data);
+}
+
+export async function deleteViewBoard(id: string): Promise<void> {
+  return deleteViewBoardAt(WORKING_ON_DIR, id);
+}
+
+// --- Custom views (no legacy migration) ---
+
+export async function readCustomManifest(): Promise<ViewsManifest> {
+  return readManifestAt(CUSTOM_SLOT, null);
+}
+
+export async function writeCustomManifest(raw: unknown): Promise<ViewsManifest> {
+  return writeManifestAt(CUSTOM_SLOT, raw);
+}
+
+export async function readCustomViewBoard(id: string): Promise<BoardData> {
+  return readViewBoardAt(CUSTOM_DIR, id);
+}
+
+export async function writeCustomViewBoard(id: string, data: unknown): Promise<BoardData> {
+  return writeViewBoardAt(CUSTOM_DIR, id, data);
+}
+
+export async function deleteCustomViewBoard(id: string): Promise<void> {
+  return deleteViewBoardAt(CUSTOM_DIR, id);
 }
