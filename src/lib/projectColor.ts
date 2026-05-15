@@ -1,30 +1,19 @@
 /**
- * Project → stable color. Uses a curated 12-stop deep-Morandi palette
- * (low saturation, mid-low lightness — distinct enough to read at a
- * glance on warm-cream paper, but not screaming). Hash project name to
- * pick a stop; same name always lands on the same color.
+ * Project → stable color.
  *
- * Palette is hand-picked, not interpolated: ensures each adjacent project
- * has visibly different hue, avoiding the "they all look brownish" failure
+ * The actual hex values live in `src/index.css` as `--proj-1` … `--proj-12`
+ * (+ `--proj-none`) — a hand-curated 12-stop deep-Morandi palette tuned to
+ * read at a glance on the warm paper background without screaming. We hash
+ * the project name onto a slot 1..12 and return a CSS `var(--proj-N)` ref.
+ * Same name always lands on the same slot.
+ *
+ * Slots are hand-picked rather than interpolated so adjacent projects stay
+ * visibly different in hue, avoiding the "they all look brownish" failure
  * mode of continuous HSL hashing at low saturation.
  */
 
-const PALETTE = [
-  "#7b3f44", // burgundy
-  "#9a5e3f", // rust
-  "#8a6f33", // mustard
-  "#5e6f38", // moss
-  "#386f4c", // forest
-  "#3a6868", // dusty teal
-  "#3e5f78", // slate blue
-  "#4a4c7a", // indigo
-  "#6a3f6e", // plum
-  "#82385c", // wine
-  "#5f4a3a", // cocoa
-  "#3f4a5a", // graphite blue
-];
-
-const NO_PROJECT = "#8b8170"; // warm muted (matches --muted)
+const SLOT_COUNT = 12;
+const NO_PROJECT_VAR = "var(--proj-none)";
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -36,12 +25,13 @@ function hash(s: string): number {
 }
 
 export function projectColor(name: string | undefined | null): string {
-  if (!name) return NO_PROJECT;
-  return PALETTE[hash(name) % PALETTE.length]!;
+  if (!name) return NO_PROJECT_VAR;
+  const slot = (hash(name) % SLOT_COUNT) + 1;
+  return `var(--proj-${slot})`;
 }
 
+/** Subtle fill — uses CSS color-mix so it stays in step with the live palette. */
 export function projectColorMuted(name: string | undefined | null): string {
-  if (!name) return "rgba(139,129,112,0.35)";
   const base = projectColor(name);
-  return `${base}33`; // ~20% alpha for subtle fills
+  return `color-mix(in srgb, ${base} 20%, transparent)`;
 }

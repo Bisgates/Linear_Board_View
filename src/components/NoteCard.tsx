@@ -301,12 +301,12 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // When a note is marked done, swap the saturated accent for a muted gray so the
-// card visibly recedes on the board (Apple Reminders / Things style).
-const DONE_FRAME_COLOR = "#a8a39a";
-// "Working on" indicator color — a slightly-muted vivid blue that fits the
-// warm-paper palette but reads clearly distinct from the slate blue swatch in
-// `NOTE_COLORS` (which is user-pickable as a card frame color).
-const WORKING_COLOR = "#3b6fb8";
+// card visibly recedes on the board (Apple Reminders / Things style). Hue is
+// defined per palette in src/index.css.
+const DONE_FRAME_COLOR = "var(--note-done)";
+// "Working on" indicator color — defined per palette so it stays in step with
+// the paper hue. Distinct from any user-pickable swatch in `NOTE_COLORS`.
+const WORKING_COLOR = "var(--note-working)";
 
 type Props = NodeProps & { data: NoteData };
 
@@ -461,9 +461,12 @@ function NoteCardImpl({ data, selected }: Props) {
         background: color,
         padding: "2px 2px 2px 6px",
         borderRadius: 10,
+        // Selected glow tints the card frame colour at ~28%. color-mix lets
+        // the source colour be either a user-picked hex or a `var(--…)` ref
+        // (DONE/WORKING) — hex+alpha concatenation can't handle the latter.
         boxShadow: selected
-          ? `0 0 0 3px ${color}40, 0 4px 14px rgba(26,24,20,0.12)`
-          : "0 1px 0 rgba(26,24,20,0.04)",
+          ? `0 0 0 3px color-mix(in srgb, ${color} 28%, transparent), 0 4px 14px rgba(0,0,0,0.14)`
+          : "0 1px 0 rgba(0,0,0,0.04)",
         color: "var(--ink)",
         cursor: editing ? "text" : "grab",
         transition: "box-shadow 0.12s",
@@ -540,7 +543,7 @@ function NoteCardImpl({ data, selected }: Props) {
             ...(status === "working" && {
               border: `1.5px solid ${WORKING_COLOR}`,
               background: "var(--paper)",
-              boxShadow: `inset 0 0 6px 2px ${WORKING_COLOR}99`,
+              boxShadow: `inset 0 0 6px 2px color-mix(in srgb, ${WORKING_COLOR} 60%, transparent)`,
             }),
             ...(status === "done" && {
               border: `1px solid ${color}`,

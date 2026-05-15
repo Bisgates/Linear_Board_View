@@ -127,7 +127,7 @@ function buildNodes(
   return nodes;
 }
 
-const EDGE_COLOR = "#7a7060"; // warm taupe — sits quietly on paper, not shouty
+const EDGE_COLOR = "var(--edge)"; // see --edge in src/index.css
 
 // Snap-to-align: when a node is dragged within SNAP_THRESHOLD of another node's
 // left / centre / right (X) or top / middle / bottom (Y) line, the dragged
@@ -1880,9 +1880,9 @@ function BoardInner({
                 top: f.y,
                 width: f.w,
                 height: f.h,
-                border: "1.5px dashed #7a8b66",
+                border: "1.5px dashed var(--selection-dash)",
                 borderRadius: 10,
-                background: "rgba(122,139,102,0.04)",
+                background: "color-mix(in srgb, var(--selection-dash) 5%, transparent)",
                 // Pointer-events on so the empty interior (and the dashed
                 // border) drags the whole group; zIndex -1 keeps cards on top
                 // so clicking a card still hits the card, not the frame.
