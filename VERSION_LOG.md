@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.21.1 — 迁移存量 day view 名称到 `WW.D` 新格式
+  - 服务端 `readManifest` 读取 day manifest 时一次性识别老格式 `YYYY-MM-DD 周X` 并改写为 `YYYY-MM-DD WW.D`
+  - 保留 collision 后缀 `(N)` 等尾部内容；不匹配老格式的名字保持不动
+  - 迁移幂等；无任何 name 需要改时不刷盘（保留 mtime）；custom manifest 完全不动
+
 - v0.21.0 — 新增 Custom view 类别 + Day view 命名/改名规则更新
   - **顶栏第三个 tab `Custom`**：与 Working On 并排，结构 mirror（split ▾ 按钮 + dropdown + create / pick / rename / delete + per-view IssuePicker），但 view 可任意命名；首次创建从 `Custom 1` 起步，被占就递增最小未用编号。
   - **Day view 命名格式改为 `YYYY-MM-DD WW.D`**：`WW = floor((dayOfYear-1)/7)+1`（Jan 1 落 week 1），`D = Date.getDay()`（周日=0），例如 2026-05-15（周四）→ `2026-05-15 20.4`。client `formatDefaultViewName` + server-side legacy migration 同步换实现。

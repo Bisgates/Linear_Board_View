@@ -417,12 +417,46 @@ async function dayLegacyMigrate(): Promise<ViewsManifest | null> {
 }
 
 /**
+ * Old day view name shape: `YYYY-MM-DD 周X` with optional `(N)` collision tail.
+ * Capture group 4 keeps any trailing suffix (e.g. " (2)") so we can preserve it.
+ */
+const LEGACY_DAY_NAME_RE = /^(\d{4})-(\d{2})-(\d{2}) 周[日一二三四五六](.*)$/;
+
+/**
+ * One-shot rewrite of stored day view names from `YYYY-MM-DD 周X` to the new
+ * `YYYY-MM-DD WW.D` shape. Returns the migrated manifest plus a `changed` flag
+ * so the caller can skip disk writes when nothing moved (preserves mtime,
+ * idempotent on re-read).
+ */
+function migrateDayManifestNames(m: ViewsManifest): { manifest: ViewsManifest; changed: boolean } {
+  let changed = false;
+  const views = m.views.map((v) => {
+    const match = LEGACY_DAY_NAME_RE.exec(v.name);
+    if (!match) return v;
+    const [, yyyy, mm, dd, tail] = match;
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    const next = `${formatDefaultViewName(d)}${tail}`;
+    if (next === v.name) return v;
+    changed = true;
+    return { ...v, name: next };
+  });
+  return { manifest: changed ? { views, activeId: m.activeId } : m, changed };
+}
+
+/**
  * Read the day (Working On) manifest; on first run, migrate
  * `public/data/working_on.json` if it exists, otherwise create one empty view
- * named with today's default.
+ * named with today's default. Also rewrites any lingering `周X`-format view
+ * names from before v0.21.0 in place.
  */
 export async function readManifest(): Promise<ViewsManifest> {
-  return readManifestAt(DAY_SLOT, dayLegacyMigrate);
+  const raw = await readManifestAt(DAY_SLOT, dayLegacyMigrate);
+  const { manifest, changed } = migrateDayManifestNames(raw);
+  if (changed) {
+    await atomicWriteJson(VIEWS_MANIFEST, manifest);
+    console.log(`[boardStore] migrated day view names to WW.D format`);
+  }
+  return manifest;
 }
 
 export async function writeManifest(raw: unknown): Promise<ViewsManifest> {
