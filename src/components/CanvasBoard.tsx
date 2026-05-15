@@ -26,7 +26,7 @@ import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type ContextMenuTarget } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { BoardData, BoardEdge, GroupBox } from "../lib/workingOn";
+import type { BoardData, BoardEdge, GroupBox, NoteImage } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
@@ -116,6 +116,8 @@ function buildNodes(
         working: note.working ?? false,
         done: note.done ?? false,
         autoEdit: note.id === editingNoteId,
+        images: note.images,
+        textSegments: note.textSegments,
       } as unknown as Record<string, unknown>,
       draggable: true,
       selected: note.id === focusedCardId,
@@ -713,7 +715,17 @@ function BoardInner({
   }, [selectedIssueId]);
 
   const commitNote = useCallback(
-    (id: string, patch: { body?: string; color?: string; working?: boolean; done?: boolean }) => {
+    (
+      id: string,
+      patch: {
+        body?: string;
+        color?: string;
+        working?: boolean;
+        done?: boolean;
+        images?: NoteImage[];
+        textSegments?: string[];
+      },
+    ) => {
       setData((prev) => ({
         ...prev,
         noteNodes: prev.noteNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
@@ -763,8 +775,14 @@ function BoardInner({
         ...n,
         data: {
           ...n.data,
-          onCommit: (patch: { body?: string; color?: string; working?: boolean; done?: boolean }) =>
-            commitNote(n.id, patch),
+          onCommit: (patch: {
+            body?: string;
+            color?: string;
+            working?: boolean;
+            done?: boolean;
+            images?: NoteImage[];
+            textSegments?: string[];
+          }) => commitNote(n.id, patch),
           onEditEnd: noteEditingFinished,
         } as unknown as Record<string, unknown>,
       };
@@ -1410,6 +1428,119 @@ function BoardInner({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast]);
+
+  // Paste an image from the system clipboard. Target priority:
+  //   1. note currently being edited → append to it
+  //   2. the single selected note (if any) → append to it
+  //   3. otherwise → mint a fresh note at the viewport centre that wraps the
+  //      image (user pastes in empty space).
+  // preventDefault is called only when an image is found, so plain-text paste
+  // into a textarea still works.
+  useEffect(() => {
+    const onPaste = (evt: ClipboardEvent) => {
+      const dt = evt.clipboardData;
+      if (!dt) return;
+      let file: File | null = null;
+      for (let i = 0; i < dt.items.length; i++) {
+        const it = dt.items[i];
+        if (it && it.kind === "file" && it.type.startsWith("image/")) {
+          file = it.getAsFile();
+          break;
+        }
+      }
+      if (!file) return;
+      evt.preventDefault();
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result || "");
+        if (!src.startsWith("data:image/")) return;
+        // Probe natural dims so the embedded image keeps its real aspect ratio.
+        const probe = new Image();
+        probe.onload = () => {
+          const nw = probe.naturalWidth || 256;
+          const nh = probe.naturalHeight || 192;
+
+          const editingId = editingNoteIdRef.current;
+          let targetId: string | null = null;
+          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
+            targetId = editingId;
+          } else {
+            const selectedNote = reactFlow.getNodes().find(
+              (n) => n.selected && n.type === "note",
+            );
+            if (selectedNote) targetId = selectedNote.id;
+          }
+
+          // Card is fixed at 280; outer paddings eat 8px and the inner paper
+          // eats another 24px → 248 inner content width is the cap.
+          const TARGET_W = 280 - 8 - 24;
+          const w = Math.min(nw, TARGET_W);
+          const h = Math.max(1, Math.round((w / nw) * nh));
+          const newImg: NoteImage = { id: shortId("img"), src, w, h };
+
+          if (targetId) {
+            const id = targetId;
+            setData((prev) => ({
+              ...prev,
+              // Append the image at the end and grow textSegments by one
+              // empty slot so the new image sits between the previous
+              // trailing segment and a fresh empty textarea (user can type
+              // below it). Existing trailing segment text is preserved.
+              noteNodes: prev.noteNodes.map((n) => {
+                if (n.id !== id) return n;
+                const imgs = [...(n.images ?? []), newImg];
+                const prevSegs =
+                  Array.isArray(n.textSegments) &&
+                  n.textSegments.length === (n.images ?? []).length + 1
+                    ? n.textSegments
+                    : (n.images ?? []).length === 0
+                      ? [n.body ?? ""]
+                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
+                const nextSegs = [...prevSegs, ""];
+                return {
+                  ...n,
+                  images: imgs,
+                  textSegments: nextSegs,
+                  body: nextSegs.join("\n"),
+                };
+              }),
+            }));
+            return;
+          }
+
+          // Empty-space paste → new note at viewport centre. textSegments has
+          // two empty slots so the image is wrapped by a textarea above and
+          // below — both editable so the user can add text either side.
+          const rect = wrapperRef.current?.getBoundingClientRect();
+          const centerScreen = rect
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+          const center = reactFlow.screenToFlowPosition(centerScreen);
+          const id = shortId("n");
+          setData((prev) => ({
+            ...prev,
+            noteNodes: [
+              ...prev.noteNodes,
+              {
+                id,
+                body: "",
+                x: center.x,
+                y: center.y,
+                images: [newImg],
+                textSegments: ["", ""],
+              },
+            ],
+          }));
+          setFocusedCardId(id);
+        };
+        probe.src = src;
+      };
+      reader.readAsDataURL(file);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [reactFlow, setData]);
 
   // Drag the entire group by grabbing the dashed frame's empty interior
   // (frame sits at zIndex -1 so cards still catch clicks on their own area).

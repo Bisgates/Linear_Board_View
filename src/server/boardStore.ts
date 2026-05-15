@@ -10,9 +10,26 @@ const WORKING_ON_DIR = resolve(DATA_DIR, "working_on");
 const VIEWS_MANIFEST = resolve(WORKING_ON_DIR, "views.json");
 const LEGACY_WORKING_ON = resolve(DATA_DIR, "working_on.json");
 
+export interface NoteImage {
+  id: string;
+  src: string;
+  w: number;
+  h: number;
+}
+
 export interface BoardData {
   issueMembers: Record<string, { x: number; y: number }>;
-  noteNodes: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean }[];
+  noteNodes: {
+    id: string;
+    body: string;
+    x: number;
+    y: number;
+    color?: string;
+    working?: boolean;
+    done?: boolean;
+    images?: NoteImage[];
+    textSegments?: string[];
+  }[];
   edges: { id: string; source: string; target: string; sourceHandle?: string; targetHandle?: string; label?: string }[];
   groups: { id: string; memberIds: string[] }[];
 }
@@ -93,6 +110,41 @@ function validate(raw: unknown): BoardData {
         }
         if (typeof r.done === "boolean") {
           note.done = r.done;
+        }
+        if (Array.isArray(r.images)) {
+          const imgs: NoteImage[] = [];
+          for (const img of r.images) {
+            if (!img || typeof img !== "object") continue;
+            const ir = img as Record<string, unknown>;
+            if (
+              typeof ir.id === "string" &&
+              typeof ir.src === "string" &&
+              ir.src.startsWith("data:image/") &&
+              typeof ir.w === "number" &&
+              typeof ir.h === "number" &&
+              ir.w > 0 &&
+              ir.h > 0
+            ) {
+              imgs.push({ id: ir.id, src: ir.src, w: ir.w, h: ir.h });
+            }
+          }
+          if (imgs.length > 0) note.images = imgs;
+        }
+        // textSegments — accept only when shape matches `images.length + 1`.
+        // Older notes without this field will be migrated on the client by
+        // splitting `body` into segment 0 with trailing empty segments.
+        const imgCount = note.images ? note.images.length : 0;
+        if (Array.isArray(r.textSegments) && r.textSegments.length === imgCount + 1) {
+          const segs: string[] = [];
+          let allStrings = true;
+          for (const s of r.textSegments) {
+            if (typeof s !== "string") {
+              allStrings = false;
+              break;
+            }
+            segs.push(s);
+          }
+          if (allStrings) note.textSegments = segs;
         }
         notes.push(note);
       }

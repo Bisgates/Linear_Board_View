@@ -1,3 +1,11 @@
+export interface NoteImage {
+  id: string;
+  // Data URL (base64) — stored inline in the board JSON.
+  src: string;
+  w: number;
+  h: number;
+}
+
 export interface NoteNode {
   id: string;
   body: string;
@@ -9,6 +17,12 @@ export interface NoteNode {
   // working — the click handler always clears the other).
   working?: boolean;
   done?: boolean;
+  images?: NoteImage[];
+  // Interleaved text segments — `textSegments[i]` renders before `images[i]`,
+  // and `textSegments[images.length]` is the trailing text after the last
+  // image. Length is always `images.length + 1`. `body` is kept as the joined
+  // value for back-compat with code that just needs flattened text.
+  textSegments?: string[];
 }
 
 /**

@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { DEFAULT_NOTE_COLOR, openLocalPath } from "../lib/workingOn";
+import { DEFAULT_NOTE_COLOR, openLocalPath, type NoteImage } from "../lib/workingOn";
 
 // Match http(s) URLs and absolute Mac / Linux file paths (common roots only).
 // Stops at whitespace and common trailing punctuation so a URL in parens or a
@@ -72,8 +72,232 @@ interface NoteData {
   working?: boolean;
   done?: boolean;
   autoEdit?: boolean;
-  onCommit?: (patch: { body?: string; color?: string; working?: boolean; done?: boolean }) => void;
+  images?: NoteImage[];
+  textSegments?: string[];
+  onCommit?: (patch: {
+    body?: string;
+    color?: string;
+    working?: boolean;
+    done?: boolean;
+    images?: NoteImage[];
+    textSegments?: string[];
+  }) => void;
   onEditEnd?: () => void;
+}
+
+/**
+ * Compute the segment list from a NoteData. textSegments[i] sits before
+ * images[i]; segments.length is always images.length + 1. Old notes that
+ * pre-date this field migrate as `[body, '', '', ...]` — text first, empty
+ * trailing slots between/after images so the user can immediately start
+ * typing below any image.
+ */
+function deriveSegments(data: NoteData): string[] {
+  const imgs = data.images ?? [];
+  const stored = data.textSegments;
+  if (Array.isArray(stored) && stored.length === imgs.length + 1) return stored.slice();
+  const body = data.body ?? "";
+  if (imgs.length === 0) return [body];
+  const out = new Array(imgs.length + 1).fill("");
+  out[0] = body;
+  return out;
+}
+
+function segmentsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// Resize bounds for embedded note images.
+const IMG_MIN = 40;
+const IMG_MAX = 1200;
+
+type Corner = "tl" | "tr" | "bl" | "br";
+
+interface NoteImageViewProps {
+  image: NoteImage;
+  showHandles: boolean;
+  accent: string;
+  // Render-time width cap. Card is fixed-width, so any stored width above this
+  // is squeezed down on display, preserving aspect via `dh` below. Resize
+  // drags also clamp to this so the user can't grow the image past the card.
+  maxW: number;
+  onChange: (next: NoteImage) => void;
+  onDelete: () => void;
+}
+
+/**
+ * Single embedded image with 4-corner resize handles. Handles only paint when
+ * `showHandles` is true (i.e. the parent NoteCard is currently selected).
+ * Shift during drag locks the original aspect ratio; default is free resize.
+ */
+function NoteImageView({ image, showHandles, accent, maxW, onChange, onDelete }: NoteImageViewProps) {
+  const startRef = useRef<{
+    corner: Corner;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    aspect: number;
+  } | null>(null);
+  const [drafting, setDrafting] = useState<{ w: number; h: number } | null>(null);
+
+  // Displayed size respects the parent's width cap; height scales with aspect
+  // so a clamped-width image keeps proportions.
+  const displayW = Math.min(image.w, maxW);
+  const displayH = image.w > 0 ? image.h * (displayW / image.w) : image.h;
+
+  const beginResize = (corner: Corner) => (evt: React.PointerEvent) => {
+    evt.preventDefault();
+    evt.stopPropagation();
+    (evt.target as Element).setPointerCapture?.(evt.pointerId);
+    startRef.current = {
+      corner,
+      x: evt.clientX,
+      y: evt.clientY,
+      w: displayW,
+      h: displayH,
+      aspect: displayW / Math.max(displayH, 1),
+    };
+    setDrafting({ w: displayW, h: displayH });
+  };
+
+  const onMove = (evt: React.PointerEvent) => {
+    const s = startRef.current;
+    if (!s) return;
+    let dx = evt.clientX - s.x;
+    let dy = evt.clientY - s.y;
+    // TL / BL move the left edge → invert dx for width math.
+    if (s.corner === "tl" || s.corner === "bl") dx = -dx;
+    // TL / TR move the top edge → invert dy for height math.
+    if (s.corner === "tl" || s.corner === "tr") dy = -dy;
+    let nw = clamp(s.w + dx, IMG_MIN, maxW);
+    let nh = clamp(s.h + dy, IMG_MIN, IMG_MAX);
+    if (evt.shiftKey) {
+      // Lock to original aspect — pick the dominant axis (whichever moved more
+      // in absolute pixels) and derive the other, re-clamping both bounds.
+      if (Math.abs(dx) >= Math.abs(dy)) nh = clamp(nw / s.aspect, IMG_MIN, IMG_MAX);
+      else nw = clamp(nh * s.aspect, IMG_MIN, maxW);
+    }
+    setDrafting({ w: Math.round(nw), h: Math.round(nh) });
+  };
+
+  const endResize = (evt: React.PointerEvent) => {
+    const s = startRef.current;
+    if (!s) return;
+    (evt.target as Element).releasePointerCapture?.(evt.pointerId);
+    startRef.current = null;
+    const final = drafting ?? { w: displayW, h: displayH };
+    setDrafting(null);
+    if (final.w !== image.w || final.h !== image.h) {
+      onChange({ ...image, w: final.w, h: final.h });
+    }
+  };
+
+  const w = drafting?.w ?? displayW;
+  const h = drafting?.h ?? displayH;
+  const handleSize = 10;
+  const handleStyle = (corner: Corner): React.CSSProperties => {
+    const cursor =
+      corner === "tl" || corner === "br" ? "nwse-resize" : "nesw-resize";
+    const pos: React.CSSProperties = {};
+    if (corner === "tl") {
+      pos.left = -handleSize / 2;
+      pos.top = -handleSize / 2;
+    } else if (corner === "tr") {
+      pos.right = -handleSize / 2;
+      pos.top = -handleSize / 2;
+    } else if (corner === "bl") {
+      pos.left = -handleSize / 2;
+      pos.bottom = -handleSize / 2;
+    } else {
+      pos.right = -handleSize / 2;
+      pos.bottom = -handleSize / 2;
+    }
+    return {
+      position: "absolute",
+      width: handleSize,
+      height: handleSize,
+      background: "var(--paper)",
+      border: `1.5px solid ${accent}`,
+      borderRadius: 2,
+      cursor,
+      touchAction: "none",
+      ...pos,
+    };
+  };
+
+  return (
+    <div style={{ position: "relative", width: w, height: h }}>
+      <img
+        src={image.src}
+        alt=""
+        draggable={false}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          borderRadius: 4,
+          display: "block",
+          userSelect: "none",
+          // Pointer events stay on the img element so ReactFlow's drag picks
+          // up pointerdowns over the image area and treats them as a card
+          // drag — the image is part of the card content, not a separate
+          // interactive surface.
+        }}
+      />
+      {showHandles && (
+        <>
+          {(["tl", "tr", "bl", "br"] as Corner[]).map((c) => (
+            <div
+              key={c}
+              onPointerDown={beginResize(c)}
+              onPointerMove={onMove}
+              onPointerUp={endResize}
+              onPointerCancel={endResize}
+              style={handleStyle(c)}
+            />
+          ))}
+          <button
+            type="button"
+            aria-label="remove image"
+            className="nodrag nopan"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 4,
+              width: 18,
+              height: 18,
+              borderRadius: 9,
+              border: "none",
+              background: "rgba(26,24,20,0.55)",
+              color: "var(--paper)",
+              fontSize: 12,
+              lineHeight: 1,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+            }}
+          >
+            ×
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 // When a note is marked done, swap the saturated accent for a muted gray so the
@@ -88,15 +312,8 @@ type Props = NodeProps & { data: NoteData };
 
 function NoteCardImpl({ data, selected }: Props) {
   const [editing, setEditing] = useState<boolean>(Boolean(data.autoEdit));
-  const splitBody = (b: string): { title: string; rest: string } => {
-    const ls = b.split("\n");
-    return { title: ls[0] ?? "", rest: ls.slice(1).join("\n") };
-  };
-  const initial = splitBody(data.body);
-  const [title, setTitle] = useState(initial.title);
-  const [rest, setRest] = useState(initial.rest);
-  const titleRef = useRef<HTMLInputElement | null>(null);
-  const restRef = useRef<HTMLTextAreaElement | null>(null);
+  const [segments, setSegments] = useState<string[]>(() => deriveSegments(data));
+  const textareaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
   const accent = data.color ?? DEFAULT_NOTE_COLOR;
   const done = Boolean(data.done);
@@ -112,15 +329,11 @@ function NoteCardImpl({ data, selected }: Props) {
     border: `1.5px solid ${color}`,
   };
 
-  // Sync local state from external data.body when not editing (e.g. after a
+  // Sync local segments from external data when not editing (e.g. after a
   // server-authoritative replace). During editing we hold the user's draft.
   useEffect(() => {
-    if (!editing) {
-      const s = splitBody(data.body);
-      setTitle(s.title);
-      setRest(s.rest);
-    }
-  }, [data.body, editing]);
+    if (!editing) setSegments(deriveSegments(data));
+  }, [data.body, data.textSegments, data.images, editing]);
 
   // External edit command from CanvasBoard (driven by editingNoteId): Space
   // on a focused note sets autoEdit → enter edit; mind-map Esc clears it →
@@ -130,13 +343,21 @@ function NoteCardImpl({ data, selected }: Props) {
     setEditing(Boolean(data.autoEdit));
   }, [data.autoEdit]);
 
-  // On entering edit: focus end of whichever field has content. Empty notes
-  // → title; notes with body → body (matches the old single-textarea "end of
-  // all content" behavior).
+  // On entering edit: focus the last non-empty segment's textarea (or the
+  // first one if everything is empty). Cursor lands at end so users can keep
+  // typing where they left off.
   useEffect(() => {
     if (!editing) return;
     const raf = requestAnimationFrame(() => {
-      const el = rest ? restRef.current : titleRef.current;
+      let idx = -1;
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if ((segments[i] ?? "").length > 0) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx < 0) idx = 0;
+      const el = textareaRefs.current[idx];
       if (!el) return;
       el.focus();
       const len = el.value.length;
@@ -145,36 +366,37 @@ function NoteCardImpl({ data, selected }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [editing]);
 
-  // Autogrow the body textarea so long notes expand the card instead of
-  // scrolling internally. Run whenever content changes or edit mode opens.
+  // Autogrow each segment textarea so long notes expand the card instead of
+  // scrolling internally. Re-run whenever any segment text changes.
   useEffect(() => {
     if (!editing) return;
-    const el = restRef.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [editing, rest]);
+    for (const el of textareaRefs.current) {
+      if (!el) continue;
+      el.style.height = "0px";
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [editing, segments]);
 
   const commit = () => {
-    const joined = rest ? `${title}\n${rest}` : title;
-    if (joined !== data.body) data.onCommit?.({ body: joined });
+    const prevSegments = deriveSegments(data);
+    if (!segmentsEqual(segments, prevSegments)) {
+      data.onCommit?.({ body: segments.join("\n"), textSegments: segments });
+    }
     setEditing(false);
     data.onEditEnd?.();
   };
-  // Commit on blur only when focus leaves *both* fields (Tab between them
-  // shouldn't close the editor). Defer to next frame so the new focus target
-  // is already set.
+  // Commit on blur only when focus leaves *every* segment textarea (Tab
+  // between segments shouldn't close the editor). Defer to next frame so the
+  // new focus target is already set.
   const onFieldBlur = () => {
     requestAnimationFrame(() => {
       const a = document.activeElement;
-      if (a === titleRef.current || a === restRef.current) return;
+      for (const ref of textareaRefs.current) if (a === ref) return;
       commit();
     });
   };
   const cancel = () => {
-    const s = splitBody(data.body);
-    setTitle(s.title);
-    setRest(s.rest);
+    setSegments(deriveSegments(data));
     setEditing(false);
     data.onEditEnd?.();
   };
@@ -189,8 +411,39 @@ function NoteCardImpl({ data, selected }: Props) {
     }
   };
 
-  const titleLine = title;
-  const restText = rest;
+  const images = data.images ?? [];
+  const hasImages = images.length > 0;
+
+  // Card is fixed-width with a single layout — regardless of whether the
+  // note holds text, images, or both. Image display width is capped to the
+  // inner content area so the card never grows past its frame.
+  const CARD_W = 280;
+  const cardWidth = CARD_W;
+  const imageMaxW = CARD_W - 8 - 24;
+
+  const updateImage = (idx: number, next: NoteImage) => {
+    const nextImages = images.map((img, i) => (i === idx ? next : img));
+    data.onCommit?.({ images: nextImages });
+  };
+  // Remove image at idx — merges the two surrounding text segments back into
+  // one so the segments array stays length = images.length + 1.
+  const removeImage = (idx: number) => {
+    const nextImages = images.filter((_, i) => i !== idx);
+    const before = segments[idx] ?? "";
+    const after = segments[idx + 1] ?? "";
+    const merged = before && after ? `${before}\n${after}` : before || after;
+    const nextSegments = [
+      ...segments.slice(0, idx),
+      merged,
+      ...segments.slice(idx + 2),
+    ];
+    setSegments(nextSegments);
+    data.onCommit?.({
+      images: nextImages,
+      body: nextSegments.join("\n"),
+      textSegments: nextSegments,
+    });
+  };
 
   return (
     <div
@@ -200,7 +453,7 @@ function NoteCardImpl({ data, selected }: Props) {
         setEditing(true);
       }}
       style={{
-        width: 280,
+        width: cardWidth,
         // The outer block is the color "frame" itself; the inner paper card
         // sits inside with concentric corner radii so the left stripe + top /
         // right / bottom border curve smoothly into each other (Apple HIG —
@@ -223,6 +476,7 @@ function NoteCardImpl({ data, selected }: Props) {
 
       <div
         style={{
+          position: "relative",
           background: done ? "var(--paper-deep)" : "var(--paper-soft)",
           // Concentric radii: outer 10 − left offset 6 = 4 for left corners;
           // outer 10 − top/right/bottom offset 2 = 8 for the others.
@@ -319,107 +573,114 @@ function NoteCardImpl({ data, selected }: Props) {
         </button>
       </div>
 
-      {editing ? (
-        <>
-          <input
-            ref={titleRef}
-            value={title}
-            data-note-textarea={rest ? undefined : data.id}
-            placeholder="first line is the title…"
-            className="nodrag nopan"
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-                // Move focus to body textarea — matches old "newline goes to
-                // the next line of the body" behavior in the single-textarea
-                // version.
-                e.preventDefault();
-                const el = restRef.current;
-                if (el) {
-                  el.focus();
-                  el.setSelectionRange(0, 0);
-                }
-              } else {
-                sharedKeys(e);
-              }
-            }}
-            onBlur={onFieldBlur}
-            style={{
-              width: "100%",
-              border: "none",
-              background: "transparent",
-              padding: 0,
-              fontFamily: "var(--sans)",
-              fontSize: 14,
-              fontWeight: 600,
-              lineHeight: 1.3,
-              color: "var(--ink)",
-              outline: "none",
-              display: "block",
-              marginBottom: rest ? 6 : 0,
-            }}
-          />
-          <textarea
-            ref={restRef}
-            value={rest}
-            data-note-textarea={rest ? data.id : undefined}
-            rows={1}
-            className="nodrag nopan"
-            onChange={(e) => setRest(e.target.value)}
-            onKeyDown={sharedKeys}
-            onBlur={onFieldBlur}
-            style={{
-              width: "100%",
-              resize: "none",
-              border: "none",
-              background: "transparent",
-              padding: 0,
-              fontFamily: "var(--sans)",
-              fontSize: 12,
-              lineHeight: 1.4,
-              color: "var(--ink-soft)",
-              outline: "none",
-              display: "block",
-              overflow: "hidden",
-            }}
-          />
-        </>
-      ) : (
-        <>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              lineHeight: 1.3,
-              marginBottom: restText ? 6 : 0,
-              color: done ? "var(--muted)" : titleLine ? "var(--ink)" : "var(--muted)",
-              fontStyle: titleLine ? "normal" : "italic",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              textDecoration: done ? "line-through" : "none",
-              textDecorationColor: done ? "var(--muted)" : undefined,
-              textDecorationThickness: done ? "1.5px" : undefined,
-            }}
-          >
-            {titleLine ? renderTokens(titleLine, color) : "untitled (double-click to edit)"}
-          </div>
-          {restText && (
-            <div
-              style={{
-                fontSize: 12,
-                color: done ? "var(--muted)" : "var(--ink-soft)",
-                lineHeight: 1.4,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                textDecoration: done ? "line-through" : "none",
-                textDecorationColor: done ? "var(--muted)" : undefined,
+      <div style={{ display: "flex", flexDirection: "column", gap: editing ? 4 : 0 }}>
+        {segments.map((segText, i) => {
+          const isFirstSegment = i === 0;
+          // Render one segment (block) — textarea while editing, styled text
+          // while viewing. Empty segments are skipped in view mode so they
+          // don't introduce phantom whitespace between image and body.
+          const segmentNode = editing ? (
+            <textarea
+              key={`seg-${i}`}
+              ref={(el) => {
+                textareaRefs.current[i] = el;
               }}
-            >
-              {renderTokens(restText, color)}
+              value={segText}
+              data-note-textarea={isFirstSegment ? data.id : undefined}
+              rows={1}
+              placeholder={isFirstSegment ? "first line is the title…" : "add text…"}
+              className="nodrag nopan"
+              onChange={(e) => {
+                const next = segments.slice();
+                next[i] = e.target.value;
+                setSegments(next);
+              }}
+              onKeyDown={sharedKeys}
+              onBlur={onFieldBlur}
+              style={{
+                width: "100%",
+                resize: "none",
+                border: "none",
+                background: "transparent",
+                padding: 0,
+                fontFamily: "var(--sans)",
+                fontSize: 13,
+                lineHeight: 1.4,
+                color: "var(--ink-soft)",
+                outline: "none",
+                display: "block",
+                overflow: "hidden",
+              }}
+            />
+          ) : (
+            segText ? (
+              <div key={`seg-${i}`}>
+                {segText.split("\n").map((line, lineIdx) => {
+                  const isTitleLine = isFirstSegment && lineIdx === 0;
+                  const lineStyle: React.CSSProperties = isTitleLine
+                    ? {
+                        fontSize: 14,
+                        fontWeight: 600,
+                        lineHeight: 1.3,
+                        color: done ? "var(--muted)" : "var(--ink)",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        textDecoration: done ? "line-through" : "none",
+                        textDecorationColor: done ? "var(--muted)" : undefined,
+                        textDecorationThickness: done ? "1.5px" : undefined,
+                      }
+                    : {
+                        fontSize: 12,
+                        color: done ? "var(--muted)" : "var(--ink-soft)",
+                        lineHeight: 1.4,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        textDecoration: done ? "line-through" : "none",
+                        textDecorationColor: done ? "var(--muted)" : undefined,
+                      };
+                  return (
+                    <div key={lineIdx} style={lineStyle}>
+                      {line ? renderTokens(line, color) : " "}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : isFirstSegment && !hasImages ? (
+              <div
+                key={`seg-${i}`}
+                style={{
+                  fontSize: 14,
+                  fontWeight: 600,
+                  lineHeight: 1.3,
+                  color: "var(--muted)",
+                  fontStyle: "italic",
+                }}
+              >
+                untitled (double-click to edit)
+              </div>
+            ) : null
+          );
+          const img = images[i];
+          const imageNode = img ? (
+            <div key={`img-${img.id}`} style={{ marginTop: editing || segText ? 6 : 0 }}>
+              <NoteImageView
+                image={img}
+                showHandles={Boolean(selected)}
+                accent={color}
+                maxW={imageMaxW}
+                onChange={(next) => updateImage(i, next)}
+                onDelete={() => removeImage(i)}
+              />
             </div>
-          )}
-        </>
-      )}
+          ) : null;
+          return (
+            <Fragment key={`block-${i}`}>
+              {segmentNode}
+              {imageNode}
+            </Fragment>
+          );
+        })}
+      </div>
       </div>
     </div>
   );
