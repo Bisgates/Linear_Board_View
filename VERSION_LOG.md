@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.18.0 — 背景色调淡为 warm-softer-1 + 颜色 token 全面语义化
+  - **背景三层换色**：canvas / panel / card 由 `#f4ecdd` / `#ede2cc` / `#ede2cc` 调到 `#f7f6f1` / `#f1eee8` / `#fcfbf8`，本质是 warm-soft 基色 S×0.65、L+1.5pp（饱和度做主驱动，亮度只微调，避免三层压平成纯白）。整页"奶油黄"明显退一档但仍带暖意；前景文字 / accent / status / project 色不动，跟原 warm 系一致。
+  - **颜色 token 语义化**：原本散落在 IssueCard / FilterBar / DetailPanel / NoteCard / Toast / CanvasBoard / projectColor.ts 里的硬编码 hex（priority / state / 12 色 project palette / edge / dashed selection / done frame / working indicator / toast 三色）全部抽进 `src/index.css` 的 `:root`，用 `--canvas` / `--panel` / `--card` / `--ink*` / `--prio-*` / `--status-*` / `--proj-1..12` / `--note-done` / `--note-working` / `--edge` / `--selection-dash` / `--toast-*` 命名约定。`projectColor()` 改返回 `var(--proj-N)`。
+  - **hex+alpha 拼接 → color-mix**：原来的 `${color}1f` / `${color}40` / `${color}99` 在 `color` 变成 `var(--…)` 后失效，全部换成 `color-mix(in srgb, X N%, transparent)`（Chrome 111+ / Safari 16.4+ / Firefox 113+ 已稳）。selected glow 因此能跟卡片自身 frame 色（项目色或用户挑的 note 色）对齐。
+  - **流程**：本次走的是 worktree 探索 PR——先给 6 个候选主题 + 临时 ThemeSwitcher 让用户在浏览器里挑，挑中 warm-soft 后再延伸 3 个"更淡"变体（softer-1/2/3），用户选 softer-1。最终化时 switcher / themes.ts / 其他 5 个候选主题块全部删除，单一主题直接合进 `:root`，backwards-compat alias（`--paper` / `--paper-soft` / `--paper-deep` / `--warm-red`）保留以免 churn 未触及组件。
+
 - v0.17.1 — 修 Tab 新建子 note 把 parent 一起拖进多选
   - 起因：rebuild effect 为了保 box-select / g group 多选，会把上一次 nodes 里所有 `selected:true` flag 跨 data 写回保留下来。
   - Tab 之前 parent 是 focused+selected，rebuild 把 parent 保留 + `buildNodes` 又给 newId 按 `focusedCardId` 加 selected → 双选 → 浮出 NoteSelectionPalette 共享颜色 + 整组同移。

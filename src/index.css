@@ -1,16 +1,124 @@
+/*
+ * Single-theme tokens — the warm-soft palette with its background layers
+ * desaturated by ~35% and lifted ~1.5pp ("warm-softer-1" from the theme
+ * exploration round). Foreground / accent / status / project / note / edge
+ * tokens are inherited verbatim from the warm-soft base so the family
+ * identity is preserved and only the canvas/panel/card surfaces step down
+ * in yellow.
+ *
+ * Token contract:
+ *
+ *   Surfaces
+ *     --canvas             page-level background (board surface)
+ *     --canvas-grain       dot-grain alpha overlay over canvas
+ *     --panel              top bar / filter bar / detail panel surface
+ *     --panel-soft         hover / inset variant of panel
+ *     --card               issue card body
+ *     --card-soft          card hover / secondary
+ *
+ *   Text
+ *     --ink                primary foreground
+ *     --ink-soft           secondary foreground
+ *     --muted              tertiary / labels / placeholders
+ *
+ *   Lines & focus
+ *     --hairline           1px borders, dividers
+ *     --hairline-strong    emphasised borders
+ *     --selection-ring     selection outline / glow base
+ *     --accent             single brand-ish accent
+ *     --accent-soft        accent tint background
+ *
+ *   Status (workflow state) + Priority (urgent → low)
+ *     --status-{backlog|unstarted|started|completed|canceled|triage}
+ *     --prio-{none|urgent|high|med|low}
+ *
+ *   Toast palette
+ *     --toast-{success,error}-{bg,bd,fg}
+ *
+ *   Project palette (12 swatches, hashed by project name) + project fallback
+ *     --proj-1 .. --proj-12, --proj-none
+ *
+ *   Notes / edges
+ *     --note-done          frame colour for done notes (recedes)
+ *     --note-working       "in progress" indicator
+ *     --edge               default xyflow edge stroke
+ *     --selection-dash     box-select / group-frame dashed outline
+ */
+
 :root {
   color-scheme: light;
-  /* Warm paper surfaces (ported from /grok template) */
-  --paper: #f4ecdd;
-  --paper-soft: #ede2cc;
-  --paper-deep: #e6dcc4;
-  --ink: #1a1814;
-  --ink-soft: #4a4438;
-  --muted: #8b8170;
-  --hairline: rgba(26, 24, 20, 0.18);
 
-  /* Editorial accents */
-  --warm-red: #b23a48;
+  /* Surfaces — warm-softer-1 (S×0.65, L+1.5pp vs warm-soft) */
+  --canvas: #f7f6f1;
+  --canvas-grain: rgba(0, 0, 0, 0.012);
+  --panel: #f1eee8;
+  --panel-soft: #eae7de;
+  --card: #fcfbf8;
+  --card-soft: #f3f0ea;
+
+  /* Text */
+  --ink: #2a2620;
+  --ink-soft: #58524a;
+  --muted: #968d7d;
+
+  /* Lines & focus */
+  --hairline: rgba(40, 36, 30, 0.14);
+  --hairline-strong: rgba(40, 36, 30, 0.26);
+  --selection-ring: rgba(40, 36, 30, 0.28);
+  --accent: #a85562;
+  --accent-soft: rgba(168, 85, 98, 0.10);
+
+  /* Workflow state colours */
+  --status-backlog: #968d7d;
+  --status-unstarted: #58524a;
+  --status-started: #b07a3e;
+  --status-completed: #4f7a5d;
+  --status-canceled: #b9b1a3;
+  --status-triage: #7a5290;
+
+  /* Priority colours (urgent → low) */
+  --prio-none: #968d7d;
+  --prio-urgent: #a85562;
+  --prio-high: #b07a3e;
+  --prio-med: #4671a0;
+  --prio-low: #4f7a5d;
+
+  /* Toast */
+  --toast-success-bg: rgba(79, 122, 93, 0.12);
+  --toast-success-bd: rgba(79, 122, 93, 0.40);
+  --toast-success-fg: #4f7a5d;
+  --toast-error-bg: rgba(168, 85, 98, 0.10);
+  --toast-error-bd: rgba(168, 85, 98, 0.45);
+  --toast-error-fg: #a85562;
+
+  /* Project palette — hand-curated 12 swatches; hash project name to slot */
+  --proj-1:  #9a5560;
+  --proj-2:  #b07a4f;
+  --proj-3:  #a08745;
+  --proj-4:  #76874a;
+  --proj-5:  #4f8060;
+  --proj-6:  #4e7878;
+  --proj-7:  #527088;
+  --proj-8:  #5d5f88;
+  --proj-9:  #7c5380;
+  --proj-10: #93516e;
+  --proj-11: #76604c;
+  --proj-12: #535e6e;
+  --proj-none: #968d7d;
+
+  /* Notes / edges */
+  --note-done: #b9b1a3;
+  --note-working: #4671a0;
+  --edge: #8a8170;
+  --selection-dash: #8a9778;
+
+  /* Backwards-compat aliases. Older code paths reference --paper / --paper-soft
+   * / --warm-red / etc. directly; aliasing keeps those resolving to the new
+   * surface tokens without touching every component again. */
+  --paper: var(--canvas);
+  --paper-soft: var(--panel);
+  --paper-deep: var(--panel-soft);
+  --warm-red: var(--accent);
   --indigo: #3b3a8a;
   --forest: #2f5c3f;
   --amber: #a86810;
@@ -36,16 +144,16 @@ body,
 }
 
 body {
-  background: var(--paper);
+  background: var(--canvas);
   color: var(--ink);
   font-family: var(--sans);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* Subtle dual-layer dot grain — pulled from /grok */
+  /* Subtle dual-layer dot grain — alpha tuned via --canvas-grain */
   background-image:
-    radial-gradient(rgba(0, 0, 0, 0.018) 1px, transparent 1px),
-    radial-gradient(rgba(0, 0, 0, 0.012) 1px, transparent 1px);
+    radial-gradient(var(--canvas-grain) 1px, transparent 1px),
+    radial-gradient(var(--canvas-grain) 1px, transparent 1px);
   background-size:
     3px 3px,
     7px 7px;
@@ -66,10 +174,10 @@ body {
   color: var(--muted) !important;
 }
 .react-flow__controls {
-  background: var(--paper-soft);
+  background: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: 6px;
-  box-shadow: 0 1px 0 rgba(26, 24, 20, 0.04);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
 }
 .react-flow__controls button {
   background: transparent;
@@ -78,12 +186,12 @@ body {
   fill: var(--ink-soft);
 }
 .react-flow__controls button:hover {
-  background: rgba(178, 58, 72, 0.08);
+  background: var(--accent-soft);
   color: var(--ink);
   fill: var(--ink);
 }
 .react-flow__minimap {
-  background: var(--paper-soft) !important;
+  background: var(--panel) !important;
   border: 1px solid var(--hairline);
   border-radius: 6px;
 }
@@ -114,7 +222,7 @@ body {
 
 /* Edge hover / selected affordance — thicken stroke + faint glow so the user
  * can tell when an edge is actually selected before pressing Delete. Glow
- * colour mirrors the muted taupe edge stroke. */
+ * mirrors --hairline-strong / --selection-ring so it tracks the palette. */
 .react-flow__edge-path {
   transition:
     stroke-width 0.12s ease,
@@ -122,10 +230,10 @@ body {
 }
 .react-flow__edge:hover .react-flow__edge-path {
   stroke-width: 2.6 !important;
-  filter: drop-shadow(0 0 2px rgba(122, 112, 96, 0.55));
+  filter: drop-shadow(0 0 2px var(--hairline-strong));
   cursor: pointer;
 }
 .react-flow__edge.selected .react-flow__edge-path {
   stroke-width: 3 !important;
-  filter: drop-shadow(0 0 3px rgba(122, 112, 96, 0.75));
+  filter: drop-shadow(0 0 3px var(--selection-ring));
 }

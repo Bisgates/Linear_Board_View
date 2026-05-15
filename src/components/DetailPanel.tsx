@@ -12,12 +12,13 @@ const PRIORITY_LABEL: Record<number, string> = {
   4: "low",
 };
 
-const PRIORITY_HEX: Record<number, string> = {
-  0: "#8b8170",
-  1: "#7b3f44",
-  2: "#9a5e3f",
-  3: "#3e5f78",
-  4: "#386f4c",
+// Theme-driven CSS var refs (see src/index.css for token contract).
+const PRIORITY_VAR: Record<number, string> = {
+  0: "var(--prio-none)",
+  1: "var(--prio-urgent)",
+  2: "var(--prio-high)",
+  3: "var(--prio-med)",
+  4: "var(--prio-low)",
 };
 
 interface Option<V> {
@@ -374,8 +375,13 @@ export function DetailPanel({ issue, allIssues, workflowStates, onClose, onMutat
                 style={{
                   flex: 1,
                   padding: "5px 6px",
-                  border: `1px solid ${issue.priority === p ? PRIORITY_HEX[p] : "var(--hairline)"}`,
-                  background: issue.priority === p ? `${PRIORITY_HEX[p]}1f` : "transparent",
+                  border: `1px solid ${issue.priority === p ? PRIORITY_VAR[p] : "var(--hairline)"}`,
+                  // Active fill mixes the priority colour at ~14% (~ old 1f hex
+                  // alpha). color-mix because PRIORITY_VAR is `var(--…)`.
+                  background:
+                    issue.priority === p
+                      ? `color-mix(in srgb, ${PRIORITY_VAR[p]} 14%, transparent)`
+                      : "transparent",
                   color: issue.priority === p ? "var(--ink)" : "var(--ink-soft)",
                   fontSize: 11,
                   fontWeight: issue.priority === p ? 600 : 500,
@@ -448,7 +454,9 @@ export function DetailPanel({ issue, allIssues, workflowStates, onClose, onMutat
                       padding: "3px 8px",
                       borderRadius: 999,
                       border: `1px solid ${active ? l.color || "var(--ink)" : "var(--hairline)"}`,
-                      background: active ? `${l.color || "#8b8170"}1f` : "transparent",
+                      background: active
+                        ? `color-mix(in srgb, ${l.color || "var(--muted)"} 14%, transparent)`
+                        : "transparent",
                       color: active ? "var(--ink)" : "var(--ink-soft)",
                       fontSize: 11,
                       fontFamily: "var(--sans)",
@@ -461,7 +469,7 @@ export function DetailPanel({ issue, allIssues, workflowStates, onClose, onMutat
                         width: 6,
                         height: 6,
                         borderRadius: 3,
-                        background: l.color || "#8b8170",
+                        background: l.color || "var(--muted)",
                       }}
                     />
                     {l.name}

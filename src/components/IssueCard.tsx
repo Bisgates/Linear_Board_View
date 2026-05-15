@@ -6,7 +6,7 @@ import { projectColor } from "../lib/projectColor";
 const HANDLE_STYLE: React.CSSProperties = {
   width: 10,
   height: 10,
-  background: "var(--paper)",
+  background: "var(--canvas)",
   border: "1.5px solid var(--ink-soft)",
 };
 
@@ -18,22 +18,22 @@ const PRIORITY_LABEL: Record<number, string> = {
   4: "low",
 };
 
-/* Muted-but-distinct on warm cream paper */
-const PRIORITY_COLOR: Record<number, string> = {
-  0: "#8b8170", // muted
-  1: "#b23a48", // warm-red
-  2: "#a86810", // amber
-  3: "#1e5a8a", // slate
-  4: "#2f5c3f", // forest
+/* Theme-driven CSS variable refs — every colour token lives in src/index.css. */
+const PRIORITY_VAR: Record<number, string> = {
+  0: "var(--prio-none)",
+  1: "var(--prio-urgent)",
+  2: "var(--prio-high)",
+  3: "var(--prio-med)",
+  4: "var(--prio-low)",
 };
 
-const STATE_COLOR: Record<string, string> = {
-  backlog: "#8b8170",
-  unstarted: "#4a4438",
-  started: "#a86810",
-  completed: "#2f5c3f",
-  canceled: "#8b8170",
-  triage: "#6c3483",
+const STATE_VAR: Record<string, string> = {
+  backlog: "var(--status-backlog)",
+  unstarted: "var(--status-unstarted)",
+  started: "var(--status-started)",
+  completed: "var(--status-completed)",
+  canceled: "var(--status-canceled)",
+  triage: "var(--status-triage)",
 };
 
 function hashHue(s: string): number {
@@ -55,8 +55,8 @@ function avatarChip(name: string): { initials: string; bg: string } {
 type Props = NodeProps & { data: IssueRecord };
 
 function IssueCardImpl({ data, selected }: Props) {
-  const stateColor = STATE_COLOR[data.state.type] ?? "#8b8170";
-  const prioColor = PRIORITY_COLOR[data.priority] ?? "#8b8170";
+  const stateColor = STATE_VAR[data.state.type] ?? "var(--muted)";
+  const prioColor = PRIORITY_VAR[data.priority] ?? "var(--muted)";
   const prioLabel = PRIORITY_LABEL[data.priority] ?? "none";
   const av = data.assignee ? avatarChip(data.assignee.name) : null;
   const projColor = projectColor(data.project?.name);
@@ -65,13 +65,17 @@ function IssueCardImpl({ data, selected }: Props) {
     <div
       style={{
         width: 280,
-        background: "var(--paper-soft)",
+        background: "var(--card)",
         border: `2px solid ${projColor}`,
         borderRadius: 8,
         padding: "10px 12px",
+        // Selected glow tints the project frame colour at ~28% so it matches
+        // whichever project this card belongs to. color-mix is required because
+        // projColor is a `var(--proj-N)` ref, so hex+alpha concatenation
+        // (`${projColor}40`) wouldn't produce a valid CSS colour.
         boxShadow: selected
-          ? `0 0 0 3px ${projColor}40, 0 4px 14px rgba(26,24,20,0.12)`
-          : "0 1px 0 rgba(26,24,20,0.04)",
+          ? `0 0 0 3px color-mix(in srgb, ${projColor} 28%, transparent), 0 4px 14px rgba(0,0,0,0.14)`
+          : "0 1px 0 rgba(0,0,0,0.04)",
         color: "var(--ink)",
         cursor: "grab",
         transition: "box-shadow 0.12s",
@@ -176,7 +180,7 @@ function IssueCardImpl({ data, selected }: Props) {
               height: 22,
               borderRadius: "50%",
               background: av.bg,
-              color: "var(--paper)",
+              color: "var(--canvas)",
               fontSize: 10,
               fontWeight: 600,
               display: "inline-flex",
@@ -203,7 +207,7 @@ function IssueCardImpl({ data, selected }: Props) {
                 width: 8,
                 height: 8,
                 borderRadius: 4,
-                background: l.color || "#8b8170",
+                background: l.color || "var(--muted)",
               }}
             />
           ))}

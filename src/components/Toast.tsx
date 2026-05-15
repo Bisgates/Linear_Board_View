@@ -12,9 +12,17 @@ interface ToastStackProps {
 }
 
 const KIND_COLOR: Record<ToastItem["kind"], { bg: string; border: string; fg: string }> = {
-  info: { bg: "var(--paper-soft)", border: "var(--hairline)", fg: "var(--ink)" },
-  success: { bg: "rgba(56,111,76,0.12)", border: "rgba(56,111,76,0.4)", fg: "#386f4c" },
-  error: { bg: "rgba(123,63,68,0.10)", border: "rgba(123,63,68,0.45)", fg: "#7b3f44" },
+  info: { bg: "var(--panel)", border: "var(--hairline)", fg: "var(--ink)" },
+  success: {
+    bg: "var(--toast-success-bg)",
+    border: "var(--toast-success-bd)",
+    fg: "var(--toast-success-fg)",
+  },
+  error: {
+    bg: "var(--toast-error-bg)",
+    border: "var(--toast-error-bd)",
+    fg: "var(--toast-error-fg)",
+  },
 };
 
 function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: string) => void }) {
@@ -35,7 +43,7 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: string) =
         borderRadius: 4,
         fontSize: 12,
         fontFamily: "var(--sans)",
-        boxShadow: "0 4px 12px rgba(26,24,20,0.08)",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
         maxWidth: 360,
         cursor: "pointer",
       }}

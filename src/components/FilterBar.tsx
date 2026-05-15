@@ -9,21 +9,22 @@ interface FilterBarProps {
   onChange: (next: FilterState) => void;
 }
 
-const PRIORITY_HEX: Record<number, string> = {
-  0: "#8b8170",
-  1: "#7b3f44",
-  2: "#9a5e3f",
-  3: "#3e5f78",
-  4: "#386f4c",
+// Theme-driven CSS var refs (see src/index.css for token contract).
+const PRIORITY_VAR: Record<number, string> = {
+  0: "var(--prio-none)",
+  1: "var(--prio-urgent)",
+  2: "var(--prio-high)",
+  3: "var(--prio-med)",
+  4: "var(--prio-low)",
 };
 
-const STATE_HEX: Record<string, string> = {
-  backlog: "#8b8170",
-  unstarted: "#4a4438",
-  started: "#9a5e3f",
-  completed: "#386f4c",
-  canceled: "#8b8170",
-  triage: "#6a3f6e",
+const STATE_VAR: Record<string, string> = {
+  backlog: "var(--status-backlog)",
+  unstarted: "var(--status-unstarted)",
+  started: "var(--status-started)",
+  completed: "var(--status-completed)",
+  canceled: "var(--status-canceled)",
+  triage: "var(--status-triage)",
 };
 
 function toggle<T>(set: Set<T>, v: T): Set<T> {
@@ -52,7 +53,13 @@ function Chip({ active, label, count, color, onClick }: ChipProps) {
         padding: "3px 9px",
         borderRadius: 999,
         border: `1px solid ${active ? color ?? "var(--ink)" : "var(--hairline)"}`,
-        background: active ? (color ? `${color}1f` : "rgba(26,24,20,0.08)") : "transparent",
+        // `color` is a `var(--…)` ref so we mix instead of concatenating
+        // hex+alpha. ~14% mix matches the previous `${color}1f` (= 12%).
+        background: active
+          ? color
+            ? `color-mix(in srgb, ${color} 14%, transparent)`
+            : "var(--accent-soft)"
+          : "transparent",
         color: active ? "var(--ink)" : "var(--ink-soft)",
         fontSize: 11,
         fontFamily: "var(--sans)",
@@ -135,7 +142,7 @@ export function FilterBar({ filter, options, onChange }: FilterBarProps) {
         alignItems: "center",
         gap: 16,
         padding: "8px 20px",
-        background: "var(--paper)",
+        background: "var(--panel)",
         borderBottom: "1px solid var(--hairline)",
         flexShrink: 0,
         flexWrap: "wrap",
@@ -152,7 +159,7 @@ export function FilterBar({ filter, options, onChange }: FilterBarProps) {
           padding: "5px 10px",
           fontSize: 12,
           fontFamily: "var(--sans)",
-          background: "var(--paper-soft)",
+          background: "var(--panel-soft)",
           border: "1px solid var(--hairline)",
           borderRadius: 4,
           color: "var(--ink)",
@@ -166,7 +173,7 @@ export function FilterBar({ filter, options, onChange }: FilterBarProps) {
             key={o.value}
             label={o.label}
             count={o.count}
-            color={STATE_HEX[o.value]}
+            color={STATE_VAR[o.value]}
             active={filter.states.has(o.value)}
             onClick={() => onChange({ ...filter, states: toggle(filter.states, o.value) })}
           />
@@ -179,7 +186,7 @@ export function FilterBar({ filter, options, onChange }: FilterBarProps) {
             key={o.value}
             label={o.label}
             count={o.count}
-            color={PRIORITY_HEX[o.value]}
+            color={PRIORITY_VAR[o.value]}
             active={filter.priorities.has(o.value)}
             onClick={() => onChange({ ...filter, priorities: toggle(filter.priorities, o.value) })}
           />
