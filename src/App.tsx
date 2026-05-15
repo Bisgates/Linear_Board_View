@@ -7,6 +7,7 @@ import { DetailPanel } from "./components/DetailPanel";
 import { IssuePickerPopover } from "./components/IssuePickerPopover";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ToastStack, type ToastItem } from "./components/Toast";
+import { EdgeStylePicker } from "./components/EdgeStylePicker";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
@@ -15,6 +16,7 @@ import { useCustomViews, useWorkingOnViews } from "./lib/useWorkingOnViews";
 import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
 import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
+import { loadEdgeStyleId, saveEdgeStyleId } from "./lib/edgeStyles";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
 import type { ClipboardPayload } from "./lib/clipboard";
@@ -70,9 +72,16 @@ export default function App() {
     | null
   >(null);
   const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
+  const [edgeStyleId, setEdgeStyleId] = useState<string>(loadEdgeStyleId);
   const workingOnBoardRef = useRef<CanvasBoardHandle | null>(null);
   const allIssuesBoardRef = useRef<CanvasBoardHandle | null>(null);
   const customBoardRef = useRef<CanvasBoardHandle | null>(null);
+
+  // Persist edge style changes to localStorage
+  const handleEdgeStyleChange = useCallback((id: string) => {
+    setEdgeStyleId(id);
+    saveEdgeStyleId(id);
+  }, []);
 
   const pushToast = useCallback((kind: ToastItem["kind"], msg: string) => {
     const id = `t${++toastSeq}`;
@@ -430,11 +439,14 @@ export default function App() {
         onCustomExpand={(a) => setDropdownAnchor({ kind: "custom", ...a })}
         onRenameActiveCustom={handleRenameActiveCustom}
         leftSlot={
-          activeView === "working_on" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
-          ) : activeView === "custom" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
-          ) : null
+          <>
+            <EdgeStylePicker value={edgeStyleId} onChange={handleEdgeStyleChange} />
+            {activeView === "working_on" ? (
+              <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
+            ) : activeView === "custom" ? (
+              <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
+            ) : null}
+          </>
         }
       />
       {dropdownAnchor?.kind === "day" && wov.manifest && (
@@ -489,6 +501,7 @@ export default function App() {
               clipboard={clipboard}
               setClipboard={setClipboard}
               onClipboardToast={pushToast}
+              edgeStyleId={edgeStyleId}
             />
           ) : activeView === "custom" ? (
             <CanvasBoard
@@ -506,6 +519,7 @@ export default function App() {
               clipboard={clipboard}
               setClipboard={setClipboard}
               onClipboardToast={pushToast}
+              edgeStyleId={edgeStyleId}
             />
           ) : (
             <CanvasBoard
@@ -523,6 +537,7 @@ export default function App() {
               clipboard={clipboard}
               setClipboard={setClipboard}
               onClipboardToast={pushToast}
+              edgeStyleId={edgeStyleId}
             />
           )}
         </div>

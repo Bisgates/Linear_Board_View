@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.22.0 — Edge 样式选择器
+  - TopBar 左侧新增 Edge Style 下拉菜单，点击可预览并切换连接线样式
+  - 8 种预设样式：Classic（默认）、Minimal、Bold、Elegant、Warm、Cool、Dashed、Dotted
+  - 样式设置自动保存到 localStorage，刷新后恢复
+  - 每种样式可定制：线条颜色、粗细、虚线、箭头类型/大小、圆角半径
+
 - v0.21.2 — 修 day view week-of-year 算法（Sunday-based）
   - 旧算法以 Jan 1 为周边界，导致 2026 年周边界落在周四（5-13 是 week 19 而 5-14 是 week 20）
   - 新算法以周日为周边界：`floor((dayOfYear + jan1.getDay() - 1) / 7) + 1`
