@@ -31,11 +31,16 @@ import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
   DEFAULT_LAYOUT_CONFIG,
+  DEFAULT_TIDY_CONFIG,
   computeChildPos,
   computeSiblingPos,
+  findAllRoots,
   findNeighbor,
+  tidyAllRoots,
+  tidySubtree,
   type Direction,
   type NodeGeo,
+  type TidyMove,
 } from "../lib/mindmapLayout";
 
 const NODE_TYPES: NodeTypes = {
@@ -1187,11 +1192,63 @@ function BoardInner({
     [setData, focusNoteTextarea],
   );
 
+  // Mindmap "tidy" — apply a list of absolute (x, y) targets to the live
+  // BoardData. Toggles a CSS class on the wrapper for the duration of the
+  // animation so xyflow's per-node transform smoothly interpolates instead
+  // of teleporting.
+  const tidyTimerRef = useRef<number | null>(null);
+  const applyTidyMoves = useCallback(
+    (moves: TidyMove[]) => {
+      if (moves.length === 0) return;
+      const wrapper = wrapperRef.current;
+      if (wrapper) wrapper.classList.add("tidy-animating");
+      setData((prev) => {
+        const issueMembers = { ...prev.issueMembers };
+        const noteIndex = new Map<string, number>();
+        prev.noteNodes.forEach((n, i) => noteIndex.set(n.id, i));
+        const noteNodes = prev.noteNodes.slice();
+        for (const mv of moves) {
+          const noteIdx = noteIndex.get(mv.id);
+          if (noteIdx !== undefined) {
+            noteNodes[noteIdx] = { ...noteNodes[noteIdx]!, x: mv.x, y: mv.y };
+          } else {
+            // Issue: mirror the same write-back path as a manual drag (see
+            // onNodesChange) — overwrite if already present, else add. On
+            // the all-issues board this turns previously implicit grid
+            // positions into explicit ones, which is the correct outcome:
+            // tidied positions should persist.
+            issueMembers[mv.id] = { x: mv.x, y: mv.y };
+          }
+        }
+        return { ...prev, issueMembers, noteNodes };
+      });
+      // Strip the animation class once the transition has settled, so manual
+      // drags afterwards remain instant (no laggy follow-the-cursor feel).
+      if (tidyTimerRef.current !== null) {
+        window.clearTimeout(tidyTimerRef.current);
+      }
+      tidyTimerRef.current = window.setTimeout(() => {
+        if (wrapper) wrapper.classList.remove("tidy-animating");
+        tidyTimerRef.current = null;
+      }, 480);
+    },
+    [setData],
+  );
+
+  useEffect(
+    () => () => {
+      if (tidyTimerRef.current !== null) window.clearTimeout(tidyTimerRef.current);
+    },
+    [],
+  );
+
   // Global hotkeys (board-scope, work whenever no text input is focused):
   //   C         = link/connect mode toggle (continuous — same source fans out
   //               until Esc / C exits)
   //   U         = undo
   //   Shift+U   = redo (undo the undo)
+  //   F         = tidy the subtree containing the focused card (Reingold-Tilford)
+  //   Shift+F   = tidy every root subtree on the canvas, stacked vertically
   //   Esc       = exit link mode OR exit note-edit mode (halo stays put)
   //   ↑↓←→     = spatial-nearest-neighbor card navigation (no DetailPanel)
   //   Space     = note → enter inline edit; issue → open DetailPanel
@@ -1288,6 +1345,37 @@ function BoardInner({
         }
         return;
       }
+      // f — tidy the focused card's local subtree (the focused card itself
+      // becomes the anchor; only IT and its descendants move). Does NOT climb
+      // to the global root — that surprised users with deep trees, where
+      // pressing F on a leaf would reflow the whole canvas because everything
+      // shared one root. If the user wants whole-canvas, that's Shift+F.
+      // Shift+F — tidy every root subtree on the canvas, stacked vertically.
+      // Plain F without a focused card is a no-op + toast hint.
+      if (evt.key === "f" || evt.key === "F") {
+        evt.preventDefault();
+        const geos = getNodeGeos();
+        const edges = dataRef.current.edges;
+        const focusId = focusedCardIdRef.current;
+        console.log(
+          `[canvas-board] F key: shift=${evt.shiftKey}, focusId=${focusId ?? "(none)"}, focusedState=${focusedCardId ?? "(none)"}, geos=${geos.length}, edges=${edges.length}`,
+        );
+        if (evt.shiftKey) {
+          const moves = tidyAllRoots(geos, edges, DEFAULT_TIDY_CONFIG);
+          if (moves.length > 0) applyTidyMoves(moves);
+          console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots`);
+        } else {
+          if (!focusId) {
+            console.log(`[canvas-board] → F no-op (no focused card; use Shift+F for whole canvas)`);
+            onClipboardToast?.("info", "请先选中一张卡片，再按 F 整理它所在的子树（或 Shift+F 整理全画布）");
+            return;
+          }
+          const moves = tidySubtree(focusId, geos, edges, DEFAULT_TIDY_CONFIG);
+          if (moves.length > 0) applyTidyMoves(moves);
+          console.log(`[canvas-board] → tidy SUBTREE from ${focusId}: ${moves.length} moves (this card stays pinned, descendants reflow)`);
+        }
+        return;
+      }
       // u — undo;  shift+u — redo (undo the undo).
       if (evt.key === "u" || evt.key === "U") {
         evt.preventDefault();
@@ -1359,7 +1447,7 @@ function BoardInner({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData]);
+  }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData, applyTidyMoves]);
 
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier

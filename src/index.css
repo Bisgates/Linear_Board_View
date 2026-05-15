@@ -237,3 +237,15 @@ body {
   stroke-width: 3 !important;
   filter: drop-shadow(0 0 3px var(--selection-ring));
 }
+
+/* Mindmap tidy animation. The board wrapper toggles `tidy-animating` for
+ * ~480ms after F / Shift+F, during which xyflow's per-node transform
+ * smoothly interpolates instead of teleporting. Edges follow because their
+ * endpoints derive from node positions. We deliberately exit the class as
+ * soon as the transition settles so subsequent drags stay instant. */
+.tidy-animating .react-flow__node {
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tidy-animating .react-flow__edge {
+  transition: opacity 0.18s ease;
+}
