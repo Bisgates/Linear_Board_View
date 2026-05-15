@@ -28,6 +28,7 @@ import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { BoardData, BoardEdge, GroupBox, NoteImage } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
+import { getEdgeStylePreset, type EdgeStylePreset } from "../lib/edgeStyles";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
   DEFAULT_LAYOUT_CONFIG,
@@ -84,6 +85,8 @@ interface CanvasBoardProps {
    * viewport to the new content (so switching Working On views doesn't strand
    * the user in empty space). */
   viewKey?: string;
+  /** Edge style preset id (e.g. "classic", "minimal", "bold"). Defaults to "classic". */
+  edgeStyleId?: string;
 }
 
 export interface CanvasBoardHandle {
@@ -134,7 +137,8 @@ function buildNodes(
   return nodes;
 }
 
-const EDGE_COLOR = "var(--edge)"; // see --edge in src/index.css
+// Default edge color, used as fallback when no preset is specified
+const DEFAULT_EDGE_COLOR = "var(--edge)"; // see --edge in src/index.css
 
 // Snap-to-align: when a node is dragged within SNAP_THRESHOLD of another node's
 // left / centre / right (X) or top / middle / bottom (Y) line, the dragged
@@ -467,7 +471,18 @@ function computeSnap(
   return { x: snappedX, y: snappedY, guides, gapGuides };
 }
 
-function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
+function buildEdges(
+  data: BoardData,
+  editingEdgeId: string | null,
+  edgeStyleId?: string,
+): Edge[] {
+  const preset = edgeStyleId ? getEdgeStylePreset(edgeStyleId) : null;
+  const strokeColor = preset?.strokeColor ?? DEFAULT_EDGE_COLOR;
+  const strokeWidth = preset?.strokeWidth ?? 1.6;
+  const markerColor = preset?.markerColor ?? strokeColor;
+  const markerType = preset?.markerType ?? MarkerType.ArrowClosed;
+  const markerSize = preset?.markerSize ?? 16;
+
   return data.edges.map((e) => ({
     id: e.id,
     source: e.source,
@@ -476,15 +491,21 @@ function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
     targetHandle: e.targetHandle,
     type: "labeled",
     markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: EDGE_COLOR,
-      width: 16,
-      height: 16,
+      type: markerType,
+      color: markerColor,
+      width: markerSize,
+      height: markerSize,
     },
-    style: { stroke: EDGE_COLOR, strokeWidth: 1.6 },
+    style: {
+      stroke: strokeColor,
+      strokeWidth,
+      strokeDasharray: preset?.strokeDasharray,
+      strokeLinecap: preset?.lineCap,
+    } as React.CSSProperties,
     data: {
       label: e.label ?? "",
       editing: editingEdgeId === e.id,
+      borderRadius: preset?.borderRadius ?? 10,
     } as Record<string, unknown>,
   }));
 }
@@ -598,6 +619,7 @@ function BoardInner({
   setClipboard,
   onClipboardToast,
   viewKey,
+  edgeStyleId,
   forwardedRef,
 }: CanvasBoardProps & { forwardedRef?: React.Ref<CanvasBoardHandle> }) {
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -704,11 +726,11 @@ function BoardInner({
   useEffect(() => {
     setEdges((current) => {
       const selectedIds = new Set(current.filter((e) => e.selected).map((e) => e.id));
-      const built = buildEdges(data, editingEdgeId);
+      const built = buildEdges(data, editingEdgeId, edgeStyleId);
       if (selectedIds.size === 0) return built;
       return built.map((e) => (selectedIds.has(e.id) ? { ...e, selected: true } : e));
     });
-  }, [data, editingEdgeId]);
+  }, [data, editingEdgeId, edgeStyleId]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((current) => applyEdgeChanges(changes, current));

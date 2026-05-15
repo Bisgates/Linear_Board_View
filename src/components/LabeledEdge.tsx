@@ -14,6 +14,8 @@ interface LabeledEdgeData {
   editing?: boolean;
   onCommit?: (label: string) => void;
   onEditEnd?: () => void;
+  /** Border radius for path corners (defaults to 10) */
+  borderRadius?: number;
 }
 
 /**
@@ -114,9 +116,10 @@ function LabeledEdgeImpl(props: EdgeProps) {
     centerX = p.centerX;
   }
 
-  // borderRadius=10 softens the corners just enough to look "cared for" — the
+  // borderRadius softens the corners; the default 10 looks "cared for" — the
   // default 5 reads as too sharp on a 1.6px stroke; bigger than ~14 starts
-  // looking bezier-y and loses the circuit-board feel.
+  // looking bezier-y and loses the circuit-board feel. The value can now be
+  // customized per edge style preset via data.borderRadius.
   // centerX makes every edge from the same source share its bend column,
   // which is what produces the visual stem when a parent has many children.
   const [path, labelX, labelY] = getSmoothStepPath({
@@ -126,7 +129,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
     targetY: ty,
     sourcePosition: sourcePos,
     targetPosition: targetPos,
-    borderRadius: 10,
+    borderRadius: data.borderRadius ?? 10,
     centerX,
   });
 
