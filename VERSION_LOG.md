@@ -2,6 +2,16 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.20.0 — Mindmap tidy 快捷键 + 干净 edge 路由
+  - **F = 整理选中卡片所在 subtree**：focused card 本身钉住，仅其后代按 d3-hierarchy Reingold-Tilford 重排（左→右展开）。原 `findRoot` 爬到全局 root 的语义砍掉——深单 root 树里点叶子按 F 会拽动整画布的反直觉行为没了。没 focus 时 toast 提示 "请先选中一张卡片…" 然后 no-op。
+  - **Shift+F = 整理全画布**：每个 root 各跑一次 tidySubtree，按当前 Y 排序后用累计 cursorY 把 bbox 顺序堆叠，相邻 root 间留 `rootGapY = 100` 的 gap，跨 root 不交叉。
+  - **Tab 改成 dumb-insert**：原本 `computeChildPos` / `computeSiblingPos` 里的 `resolveOverlaps` 连锁推下逻辑全删——新 child 只放到 parent 最末 sibling 的 `+ siblingDy`，撞了就撞了，让用户用 F 收拾。Tab 也是单次 setData，整步 1 个 undo entry。
+  - **Tidy 算法**：`tidySubtree` 用 d3-hierarchy `tree()` + 自定义 `separation((a,b) => (ha+hb)/2 + vSpacing)`（cousin 跨 parent 时再 ×1.25），多行高 NoteCard 不会压邻居。`nodeSize([1, hSpacing])` 让 separation 直接以像素为单位生效。emit 时把 d3 的中心坐标转成 xyflow 期望的 top-left（`flow.y = layout.x - h/2 + dy`）——之前没转所以高卡会向下溢出 `(h - defaultH) / 2` 撞下方兄弟。`DEFAULT_TIDY_CONFIG = { hSpacing: 420, vSpacing: 60, rootGapY: 100 }` 配 280×110 默认 NoteCard 留 ~140px 列间气口。
+  - **Edge 路由换 shared stem**：`LabeledEdge.getEdgeParams` 原来按 dominant-axis flip，children 散开后部分 sibling 翻成 Bottom→Top 出 → 同 parent 多面出线乱成一团（image #7）。改成只要 target 在 source 右就强制 Right→Left；并给 `getSmoothStepPath` 传共享的 `centerX = source.right + STEM_OFFSET(64)`——同源所有 edge 第一段在同一 X 汇合形成视觉 stem（image #8）。`borderRadius` 从默认 5 调到 10。
+  - **撤回**：tidy 一次 setData 一个 history entry，`u` 一步回滚整次重排（既有 `useBoardState` undo stack 不动）。tidy-animating CSS class 在 wrapper 上挂 ~480ms，反向也能滑回去。
+  - **依赖**：新增 `d3-hierarchy@^3.1.2` + `@types/d3-hierarchy`。
+  - 新增文件：`src/lib/mindmapLayout.ts`（pure layout helpers + tidy + findRoot/findAllRoots）。改动：CanvasBoard.tsx（hotkey + applyTidyMoves 写回 issueMembers/noteNodes）、LabeledEdge.tsx（边 routing）、ShortcutsDialog.tsx（F/⇧F + Tab 文案）、index.css（tidy-animating transition）。
+
 - v0.19.0 — NoteCard 双向链接 `[[YYMMDDxx]]` + 右键扩展菜单
   - **cardId 字段**：`NoteNode` 加可选 `cardId`（格式 `YYMMDDxx`：6 位本地日期 + 2 位随机 a–z 字母，单日 676 槽位足够单用户用）；纯函数生成器 `lib/cardId.ts` 先随机采样后落到 26×26 穷举扫，单日满了才返回 null（fail-loud 不静默碰撞）；`server/boardStore.ts` validator 用同一正则强校验，乱写的 cardId 在持久层就被拒。
   - **首启动迁移**：App 在两块 board（active working_on view + all_issues_board）loaded 后扫一遍 noteNodes，缺 `cardId` 的用今天日期前缀生成、批内去重、写回 store；幂等——重复 load 自动短路；新建 / 粘贴的 note 也走同一 effect 自动补 ID（依赖数组监听 noteNodes 变化）。

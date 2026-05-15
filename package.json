@@ -1,6 +1,6 @@
 {
   "name": "linear_board_view",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,11 +12,13 @@
   "dependencies": {
     "@linear/sdk": "^39.0.0",
     "@xyflow/react": "^12.3.5",
+    "d3-hierarchy": "^3.1.2",
     "dotenv": "^16.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
