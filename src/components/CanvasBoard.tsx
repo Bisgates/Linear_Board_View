@@ -22,6 +22,7 @@ import {
 } from "@xyflow/react";
 import type { IssueRecord } from "../linear/types";
 import { IssueCard } from "./IssueCard";
+import { AgentIssueCard } from "./AgentIssueCard";
 import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
@@ -46,6 +47,7 @@ import {
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
+  agentIssue: AgentIssueCard as unknown as NodeTypes[string],
   note: NoteCard as unknown as NodeTypes[string],
 };
 const EDGE_TYPES: EdgeTypes = {
@@ -75,6 +77,8 @@ interface CanvasBoardProps {
   initialPositions?: Record<string, { x: number; y: number }>;
   /** Hide the loading overlay text. Each view names its own store differently. */
   loadingLabel?: string;
+  /** When set to "agentIssue", IssueCard is swapped for AgentIssueCard. Default "issue". */
+  issueNodeType?: "issue" | "agentIssue";
   /** App-level clipboard buffer (shared across boards). When provided, ⌘C/⌘V are enabled. */
   clipboard?: ClipboardPayload | null;
   setClipboard?: (p: ClipboardPayload | null) => void;
@@ -101,13 +105,14 @@ function buildNodes(
   initialPositions: Record<string, { x: number; y: number }> | undefined,
   editingNoteId: string | null,
   focusedCardId: string | null,
+  issueNodeType: "issue" | "agentIssue",
 ): Node[] {
   const nodes: Node[] = [];
   for (const issue of displayedIssues) {
     const pos = data.issueMembers[issue.id] ?? initialPositions?.[issue.id] ?? { x: 0, y: 0 };
     nodes.push({
       id: issue.id,
-      type: "issue",
+      type: issueNodeType,
       position: { x: pos.x, y: pos.y },
       data: issue as unknown as Record<string, unknown>,
       draggable: true,
@@ -615,6 +620,7 @@ function BoardInner({
   selectedIssueId,
   initialPositions,
   loadingLabel,
+  issueNodeType = "issue",
   clipboard,
   setClipboard,
   onClipboardToast,
@@ -713,11 +719,11 @@ function BoardInner({
   useEffect(() => {
     setNodes((current) => {
       const selectedIds = new Set(current.filter((n) => n.selected).map((n) => n.id));
-      const built = buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId);
+      const built = buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId, issueNodeType);
       if (selectedIds.size === 0) return built;
       return built.map((n) => (selectedIds.has(n.id) ? { ...n, selected: true } : n));
     });
-  }, [displayedIssues, data, initialPositions, editingNoteId, focusedCardId]);
+  }, [displayedIssues, data, initialPositions, editingNoteId, focusedCardId, issueNodeType]);
 
   // Rebuild edges from data, preserving the currently-selected edge's
   // selection flag so click-to-select survives the rebuild. Without this

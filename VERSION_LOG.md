@@ -2,6 +2,16 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.23.0 — Agent_tmp tab: board 内启动 / 监控 / 对话 OPUS team agent
+  - 新 tab `Agent_tmp`：自动列 OPUS team open issue，每张卡换成 `AgentIssueCard`（▶ 启动 / 状态徽章 / comment thread / 输入框；输入含 `merge` 关键字自动归 `[user:merge]`，否则 `[user:reply]`）
+  - PTY agent runtime：dev plugin 起 long-lived `claude --dangerously-skip-permissions`（OAuth, 非 `-p`）per session，跑在独立 worktree；bracketed-paste 喂初始 prompt + 500ms 间隔单发 Enter 提交
+  - Poller 5s tick：拉 Linear comments，过滤 `[user:*]` 转 PTY；遇 `[agent:done]` graceful `/exit\r` + grace kill；bootstrap 把孤儿 session 标 error
+  - Comment 协议：body 首行 `[<role>:<kind>] <summary>`（agent → status/question/waiting-merge/done；user → reply/queue/merge），`agentProtocol.ts` 提供 format/parse，无前缀的人写 comment 自动忽略
+  - 新 API：`POST /api/issue/:id/comment`、`GET /api/agent/sessions`、`POST /api/agent/start`、`POST /api/agent/:id/stop`
+  - 数据层：`IssueRecord` 扩 `comments[]`，`fetchIssues` / `updateIssue` 的 GraphQL + `toRecord` 同步带上
+  - 修：Linear `orderBy: createdAt` 实际返回 DESC（代码当 ASC 导致 `lastCommentId` 取最老→后续 user 消息全卡住）→ `fetchIssueDetail` 强排序升序；fetch 抖动（ECONNRESET / ETIMEDOUT / ENOTFOUND / EAI_AGAIN）加 1 次重试
+  - 工程：`vite.config.ts` `server.watch.ignored: ['**/worktrees/**']` 防 agent 在 worktree 内 build 触发主 board reload；新依赖 `node-pty`（注意 npm prebuild 可能丢 spawn-helper 可执行位，需 `chmod +x node_modules/node-pty/prebuilds/*/spawn-helper`）
+
 - v0.22.0 — Edge 样式选择器
   - TopBar 左侧新增 Edge Style 下拉菜单，点击可预览并切换连接线样式
   - 8 种预设样式：Classic（默认）、Minimal、Bold、Elegant、Warm、Cool、Dashed、Dotted

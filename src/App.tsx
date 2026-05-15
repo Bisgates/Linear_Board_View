@@ -13,6 +13,8 @@ import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
 import { useCustomViews, useWorkingOnViews } from "./lib/useWorkingOnViews";
+import { useAgentSessions } from "./lib/useAgentSessions";
+import { AgentCardProvider } from "./lib/agentCardContext";
 import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
 import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
@@ -102,6 +104,7 @@ export default function App() {
   const allIssuesBoard = useAllIssuesBoardState((e) =>
     pushToast("error", `All-issues board save failed: ${String(e)}`),
   );
+  const agentSessions = useAgentSessions();
 
   useEffect(() => {
     (async () => {
@@ -154,6 +157,15 @@ export default function App() {
       return { ...prev, noteNodes: result.next };
     });
   }, [customBoard.loaded, customBoard.data.noteNodes, customBoard.setData]);
+
+  // Auto-refresh snapshot while on agent_tmp view so agent comments show up
+  // without manual refresh. 10s is gentle on Linear's rate limit and matches
+  // the poller's natural cadence.
+  useEffect(() => {
+    if (activeView !== "agent_tmp") return;
+    const id = window.setInterval(() => { void refresh(); }, 10_000);
+    return () => window.clearInterval(id);
+  }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = useCallback(async () => {
     setSyncing(true);
@@ -312,6 +324,52 @@ export default function App() {
   // user toggles filters.
   const allIssuesInitialPositions = useMemo(() => computeInitialLayout(allIssues), [allIssues]);
 
+  // OPUS-team issues (the agent team). agent_tmp view filters to these.
+  const opusIssues = useMemo(
+    () => allIssues.filter((i) => i.team.key === "OP"),
+    [allIssues],
+  );
+  // Agent cards are 340px wide and may grow tall when a session is active —
+  // wider columns + tall rows so cards don't overlap their neighbours.
+  const opusInitialPositions = useMemo(() => {
+    const COL_W = 380;
+    const ROW_H = 360;
+    const COLS = 3;
+    const pos: Record<string, { x: number; y: number }> = {};
+    opusIssues.forEach((iss, i) => {
+      pos[iss.id] = { x: (i % COLS) * COL_W, y: Math.floor(i / COLS) * ROW_H };
+    });
+    return pos;
+  }, [opusIssues]);
+
+  const agentCardCtxValue = useMemo(
+    () => ({
+      sessionForIssue: (issueId: string) => agentSessions.byIssueId.get(issueId),
+      start: agentSessions.startSession,
+      stop: agentSessions.stopSession,
+      postComment: async (issueId: string, body: string): Promise<boolean> => {
+        try {
+          const res = await fetch(`/api/issue/${issueId}/comment`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ body }),
+          });
+          const json = (await res.json()) as { ok: boolean; error?: string };
+          if (!json.ok) {
+            pushToast("error", `Comment failed: ${json.error ?? "unknown"}`);
+            return false;
+          }
+          return true;
+        } catch (e) {
+          pushToast("error", `Comment failed: ${String(e)}`);
+          return false;
+        }
+      },
+      refreshIssues: refresh,
+    }),
+    [agentSessions.byIssueId, agentSessions.startSession, agentSessions.stopSession, pushToast, refresh],
+  );
+
   const addToWorkingOn = useCallback(
     (issueId: string) => {
       // Anchor the placement search at the current viewport centre so the new
@@ -350,7 +408,9 @@ export default function App() {
       ? filtered.length
       : activeView === "custom"
         ? customIds.size
-        : workingOnIds.size;
+        : activeView === "agent_tmp"
+          ? opusIssues.length
+          : workingOnIds.size;
   const displayTotal = activeView === "all" ? allIssues.length : undefined;
 
   const activeViewName = useMemo(() => {
@@ -484,7 +544,27 @@ export default function App() {
           {error && (
             <div style={{ padding: 20, color: "var(--warm-red)" }}>{error}</div>
           )}
-          {activeView === "all" ? (
+          {activeView === "agent_tmp" ? (
+            <AgentCardProvider value={agentCardCtxValue}>
+              <CanvasBoard
+                viewKey="agent_tmp"
+                displayedIssues={opusIssues}
+                data={allIssuesBoard.data}
+                loaded={allIssuesBoard.loaded}
+                setData={allIssuesBoard.setData}
+                undo={allIssuesBoard.undo}
+                redo={allIssuesBoard.redo}
+                initialPositions={opusInitialPositions}
+                loadingLabel="loading agent_tmp…"
+                issueNodeType="agentIssue"
+                onSelectIssue={setSelectedId}
+                selectedIssueId={selectedId}
+                clipboard={clipboard}
+                setClipboard={setClipboard}
+                onClipboardToast={pushToast}
+              />
+            </AgentCardProvider>
+          ) : activeView === "all" ? (
             <CanvasBoard
               ref={allIssuesBoardRef}
               viewKey="all"

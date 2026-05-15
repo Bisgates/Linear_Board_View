@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
-export type ActiveView = "all" | "working_on" | "custom";
+export type ActiveView = "all" | "working_on" | "custom" | "agent_tmp";
 
 interface TopBarProps {
   lastSyncAt: string | null;
@@ -347,6 +347,18 @@ function ViewSwitcher({
           ▾
         </button>
       </div>
+      <button
+        role="tab"
+        aria-selected={value === "agent_tmp"}
+        onClick={() => onChange("agent_tmp")}
+        title="OPUS team — agent 管理（临时视图）"
+        style={{
+          ...tabBtnStyle(value === "agent_tmp", false),
+          borderLeft: "1px solid var(--hairline)",
+        }}
+      >
+        Agent_tmp
+      </button>
     </div>
   );
 }

@@ -9,7 +9,15 @@ import { platform } from "node:os";
 import { LinearClient } from "@linear/sdk";
 import { fetchAllIssues } from "../linear/fetchIssues.js";
 import { updateIssue, type IssuePatch } from "../linear/updateIssue.js";
+import { createIssueComment } from "../linear/createComment.js";
 import { fetchAllWorkflowStates } from "../linear/fetchWorkflowStates.js";
+import {
+  listSessions,
+  createSession,
+  stopSession,
+  getSession,
+} from "./agentSessions.js";
+import { startAgentPoller, ensureAgentRunning, stopAgent } from "./agentPoller.js";
 import {
   readBoard,
   writeBoard,
@@ -54,6 +62,7 @@ export function linearApiPlugin(): Plugin {
     name: "linear-api",
     apply: "serve",
     configureServer(server) {
+      if (client) startAgentPoller(client);
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? "";
 
@@ -262,6 +271,67 @@ export function linearApiPlugin(): Plugin {
               fetchedAt: snapshot.fetchedAt,
               workflowStateCount: workflowStates.length,
             });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        // GET /api/agent/sessions
+        if (url === "/api/agent/sessions" && req.method === "GET") {
+          try {
+            const sessions = await listSessions();
+            return sendJson(res, 200, { ok: true, sessions });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        // POST /api/agent/start  body: { issueId }
+        if (url === "/api/agent/start" && req.method === "POST") {
+          try {
+            const body = (await readJson(req)) as { issueId?: string };
+            if (typeof body.issueId !== "string" || !body.issueId) {
+              return sendJson(res, 400, { ok: false, error: "missing issueId" });
+            }
+            const session = await createSession(body.issueId);
+            // Spawn the PTY-driven claude subprocess (idempotent — no-op if a
+            // live agent already exists for this session).
+            ensureAgentRunning(client, session).catch((err) =>
+              console.error("[api/agent/start] spawn failed:", err),
+            );
+            return sendJson(res, 200, { ok: true, session });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        // POST /api/agent/:id/stop
+        const stopMatch = /^\/api\/agent\/([^/?#]+)\/stop(?:\?|#|$)/.exec(url);
+        if (stopMatch && req.method === "POST") {
+          const sessionId = stopMatch[1]!;
+          try {
+            const existing = await getSession(sessionId);
+            if (!existing) return sendJson(res, 404, { ok: false, error: "session not found" });
+            await stopAgent(sessionId);
+            const session = await stopSession(sessionId);
+            return sendJson(res, 200, { ok: true, session });
+          } catch (err) {
+            return sendJson(res, 500, { ok: false, error: String(err) });
+          }
+        }
+
+        // POST /api/issue/:id/comment — must precede the generic PATCH /api/issue/:id
+        // matcher below, since `/api/issue/X/comment` would also satisfy that regex.
+        const commentPostMatch = /^\/api\/issue\/([^/?#]+)\/comment(?:\?|#|$)/.exec(url);
+        if (commentPostMatch && req.method === "POST") {
+          const issueId = commentPostMatch[1]!;
+          try {
+            const body = (await readJson(req)) as { body?: string };
+            if (typeof body.body !== "string" || body.body.length === 0) {
+              return sendJson(res, 400, { ok: false, error: "missing body" });
+            }
+            const comment = await createIssueComment(client, issueId, body.body);
+            return sendJson(res, 200, { ok: true, comment });
           } catch (err) {
             return sendJson(res, 500, { ok: false, error: String(err) });
           }

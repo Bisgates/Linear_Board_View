@@ -1,3 +1,10 @@
+export interface CommentRecord {
+  id: string;
+  body: string;
+  createdAt: string;
+  user: { id: string; name: string } | null;
+}
+
 export interface IssueRecord {
   id: string;
   identifier: string;
@@ -12,6 +19,7 @@ export interface IssueRecord {
   cycle: { id: string; number: number; name: string | null } | null;
   parentId: string | null;
   childrenIds: string[];
+  comments: CommentRecord[];
 }
 
 export interface FetchResult {

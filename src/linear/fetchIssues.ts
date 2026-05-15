@@ -23,6 +23,9 @@ const ISSUES_QUERY = `
         cycle { id number name }
         parent { id }
         children { nodes { id } }
+        comments(first: 50, orderBy: createdAt) {
+          nodes { id body createdAt user { id name } }
+        }
       }
     }
   }
@@ -45,6 +48,9 @@ interface RawIssuesResponse {
       cycle: { id: string; number: number; name: string | null } | null;
       parent: { id: string } | null;
       children: { nodes: { id: string }[] };
+      comments: {
+        nodes: { id: string; body: string; createdAt: string; user: { id: string; name: string } | null }[];
+      };
     }>;
   };
 }
@@ -85,6 +91,12 @@ export async function fetchAllIssues(client: LinearClient): Promise<FetchResult>
         cycle: node.cycle,
         parentId: node.parent?.id ?? null,
         childrenIds: node.children.nodes.map((c) => c.id),
+        comments: node.comments.nodes.map((c) => ({
+          id: c.id,
+          body: c.body,
+          createdAt: c.createdAt,
+          user: c.user,
+        })),
       });
     }
 
