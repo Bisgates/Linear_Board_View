@@ -254,12 +254,14 @@ function dayOfYear(d: Date): number {
   return Math.floor(diff) + 1;
 }
 
-/** `2026-05-15 20.4` — server-side mirror of the client formatter. */
+/** `2026-05-15 20.4` — server-side mirror of the client formatter.
+ *  Sunday-based week-of-year; week 1 contains Jan 1. */
 function formatDefaultViewName(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = pad2(d.getMonth() + 1);
   const dd = pad2(d.getDate());
-  const w = Math.floor((dayOfYear(d) - 1) / 7) + 1;
+  const jan1Dow = new Date(d.getFullYear(), 0, 1).getDay();
+  const w = Math.floor((dayOfYear(d) + jan1Dow - 1) / 7) + 1;
   return `${yyyy}-${mm}-${dd} ${w}.${d.getDay()}`;
 }
 
@@ -423,22 +425,46 @@ async function dayLegacyMigrate(): Promise<ViewsManifest | null> {
 const LEGACY_DAY_NAME_RE = /^(\d{4})-(\d{2})-(\d{2}) 周[日一二三四五六](.*)$/;
 
 /**
- * One-shot rewrite of stored day view names from `YYYY-MM-DD 周X` to the new
- * `YYYY-MM-DD WW.D` shape. Returns the migrated manifest plus a `changed` flag
- * so the caller can skip disk writes when nothing moved (preserves mtime,
- * idempotent on re-read).
+ * New-format names from v0.21.0/v0.21.1 that may carry a wrong WW (Jan-1-based
+ * algorithm). Group 6 keeps any trailing collision suffix.
+ */
+const NEW_DAY_NAME_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d+)\.(\d)(.*)$/;
+
+/**
+ * Rewrite stored day view names to the current `YYYY-MM-DD WW.D` shape with
+ * the Sunday-based week algorithm. Handles two cases:
+ *   1. Pre-v0.21 `YYYY-MM-DD 周X` legacy names (defensive — v0.21.1 already
+ *      cleared these, but keep the branch in case any survive).
+ *   2. v0.21.0/v0.21.1 `YYYY-MM-DD WW.D` names whose WW was computed with the
+ *      old Jan-1-based algorithm.
+ * Returns the migrated manifest plus `changed` so the caller can skip disk
+ * writes when nothing moved (preserves mtime, idempotent on re-read).
  */
 function migrateDayManifestNames(m: ViewsManifest): { manifest: ViewsManifest; changed: boolean } {
   let changed = false;
   const views = m.views.map((v) => {
-    const match = LEGACY_DAY_NAME_RE.exec(v.name);
-    if (!match) return v;
-    const [, yyyy, mm, dd, tail] = match;
-    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-    const next = `${formatDefaultViewName(d)}${tail}`;
-    if (next === v.name) return v;
-    changed = true;
-    return { ...v, name: next };
+    const legacy = LEGACY_DAY_NAME_RE.exec(v.name);
+    if (legacy) {
+      const [, yyyy, mm, dd, tail] = legacy;
+      const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      const next = `${formatDefaultViewName(d)}${tail}`;
+      if (next === v.name) return v;
+      changed = true;
+      return { ...v, name: next };
+    }
+    const current = NEW_DAY_NAME_RE.exec(v.name);
+    if (current) {
+      const [, yyyy, mm, dd, , oldD, tail] = current;
+      const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+      // Sanity guard: if reconstructed Date disagrees with the encoded weekday
+      // the original name came from somewhere unexpected — leave it alone.
+      if (d.getDay() !== Number(oldD)) return v;
+      const next = `${formatDefaultViewName(d)}${tail}`;
+      if (next === v.name) return v;
+      changed = true;
+      return { ...v, name: next };
+    }
+    return v;
   });
   return { manifest: changed ? { views, activeId: m.activeId } : m, changed };
 }

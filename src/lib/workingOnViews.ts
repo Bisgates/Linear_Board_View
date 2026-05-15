@@ -101,12 +101,14 @@ function dayOfYear(d: Date): number {
   return Math.floor(diff) + 1;
 }
 
-/** Returns names like `2026-05-15 20.4` — date plus `<weekOfYear>.<weekday>`. */
+/** Returns names like `2026-05-15 20.4` — date plus `<weekOfYear>.<weekday>`.
+ *  Week boundary is Sunday (Sunday=0), week 1 always contains Jan 1. */
 export function formatDefaultViewName(d: Date = new Date()): string {
   const yyyy = d.getFullYear();
   const mm = pad2(d.getMonth() + 1);
   const dd = pad2(d.getDate());
-  const w = Math.floor((dayOfYear(d) - 1) / 7) + 1;
+  const jan1Dow = new Date(d.getFullYear(), 0, 1).getDay();
+  const w = Math.floor((dayOfYear(d) + jan1Dow - 1) / 7) + 1;
   return `${yyyy}-${mm}-${dd} ${w}.${d.getDay()}`;
 }
 

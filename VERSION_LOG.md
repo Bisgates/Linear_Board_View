@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.21.2 — 修 day view week-of-year 算法（Sunday-based）
+  - 旧算法以 Jan 1 为周边界，导致 2026 年周边界落在周四（5-13 是 week 19 而 5-14 是 week 20）
+  - 新算法以周日为周边界：`floor((dayOfYear + jan1.getDay() - 1) / 7) + 1`
+  - 迁移再跑一次，把已用新格式但 week 错的名字一并修正
+
 - v0.21.1 — 迁移存量 day view 名称到 `WW.D` 新格式
   - 服务端 `readManifest` 读取 day manifest 时一次性识别老格式 `YYYY-MM-DD 周X` 并改写为 `YYYY-MM-DD WW.D`
   - 保留 collision 后缀 `(N)` 等尾部内容；不匹配老格式的名字保持不动
