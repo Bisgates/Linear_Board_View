@@ -1105,6 +1105,12 @@ function BoardInner({
       setFocusedCardId(newId);
       setEditingNoteId(newId);
       focusNoteTextarea(newId);
+      // Drop any pre-existing multi-select on the prior focus / nodes
+      // (e.g. parent stayed `selected: true` from the previous interaction).
+      // The rebuild effect re-adds selection for `focusedCardId === newId`
+      // via buildNodes — we just need to clear the stale ones here so the
+      // preserve-selected branch of the rebuild doesn't carry them through.
+      setNodes((current) => current.map((n) => (n.selected ? { ...n, selected: false } : n)));
     },
     [setData, focusNoteTextarea],
   );
