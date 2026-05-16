@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.24.1 — 撤掉 Edge 样式选择器（v0.22.0 引入的）
+  - 删除 `EdgeStylePicker.tsx` 和 `lib/edgeStyles.ts`，TopBar 不再有箭头风格下拉
+  - 沟通失误导致这个功能被留了下来 —— 原本只是 review，不该 ship
+  - `buildEdges` 改回硬编码 classic 样式（var(--edge)、1.6 stroke、ArrowClosed、size 16、border-radius 10），无运行时差异
+  - App 清理 `edgeStyleId` state / localStorage hook（旧的 `linear_board_view:edge_style:v1` key 会自然失效）
+
 - v0.24.0 — Tab 键位调整 + 新卡片落位优化
   - `F` ↔ `Shift+F` 互换：`F` 现为全局整理（tidyAllRoots，常用），`Shift+F` 改成只整理 focused 子树（tidySubtree，少用）
   - Tab / Shift+Tab 插入新 card 后通过 `requestAnimationFrame` 自动跑全局 tidy，新卡片落到 mindmap 布局位置而非仅靠 parent-local 插入
