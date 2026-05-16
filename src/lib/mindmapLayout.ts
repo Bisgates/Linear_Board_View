@@ -178,6 +178,11 @@ export function computeChildPos(
  * it's treated as a root: a new same-column root is placed below it and
  * parentId is returned as null (caller skips adding an edge).
  *
+ * Places the new sibling below ALL existing siblings (max sibling Y +
+ * siblingDy), not just below the focused one. This matters because the
+ * downstream tidy preserves children order by current Y — placing it below
+ * everyone guarantees the new card lands last in the layout.
+ *
  * Same dumb-insert philosophy as computeChildPos: no collision push-down.
  */
 export function computeSiblingPos(
@@ -194,8 +199,21 @@ export function computeSiblingPos(
     .sort((a, b) => a.id.localeCompare(b.id));
   const parentId = incoming.length > 0 ? incoming[0]!.source : null;
 
+  // Lowest Y among siblings (children of parentId). Includes `current` itself.
+  // For a root (parentId === null), there is no parent to enumerate siblings
+  // from, so fall back to "below current".
+  let lowestY = current.y;
+  if (parentId !== null) {
+    for (const e of data.edges) {
+      if (e.source !== parentId) continue;
+      const sib = getNode(e.target, nodes);
+      if (!sib) continue;
+      if (sib.y > lowestY) lowestY = sib.y;
+    }
+  }
+
   const newX = current.x;
-  const newY = current.y + config.siblingDy;
+  const newY = lowestY + config.siblingDy;
 
   return { parentId, x: newX, y: newY, shifts: [] };
 }

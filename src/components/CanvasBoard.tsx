@@ -1275,13 +1275,15 @@ function BoardInner({
   //               until Esc / C exits)
   //   U         = undo
   //   Shift+U   = redo (undo the undo)
-  //   F         = tidy the subtree containing the focused card (Reingold-Tilford)
-  //   Shift+F   = tidy every root subtree on the canvas, stacked vertically
+  //   F         = tidy every root subtree on the canvas, stacked vertically
+  //   Shift+F   = tidy only the subtree containing the focused card
   //   Esc       = exit link mode OR exit note-edit mode (halo stays put)
   //   ↑↓←→     = spatial-nearest-neighbor card navigation (no DetailPanel)
   //   Space     = note → enter inline edit; issue → open DetailPanel
-  //   Tab       = generate child note (Linear issue → note, note → note)
-  //   Shift+Tab = generate sibling note under the same incoming-edge parent
+  //   Tab       = generate child note (Linear issue → note, note → note);
+  //               auto-runs global tidy after insert
+  //   Shift+Tab = generate sibling note under the same incoming-edge parent;
+  //               auto-runs global tidy after insert
   useEffect(() => {
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
@@ -1373,13 +1375,14 @@ function BoardInner({
         }
         return;
       }
-      // f — tidy the focused card's local subtree (the focused card itself
-      // becomes the anchor; only IT and its descendants move). Does NOT climb
-      // to the global root — that surprised users with deep trees, where
-      // pressing F on a leaf would reflow the whole canvas because everything
-      // shared one root. If the user wants whole-canvas, that's Shift+F.
-      // Shift+F — tidy every root subtree on the canvas, stacked vertically.
-      // Plain F without a focused card is a no-op + toast hint.
+      // f — tidy every root subtree on the canvas, stacked vertically (the
+      // common case: "just clean everything up").
+      // Shift+F — tidy only the focused card's local subtree (the focused
+      // card itself becomes the anchor; only IT and its descendants move).
+      // Does NOT climb to the global root — that surprised users with deep
+      // trees, where pressing it on a leaf would reflow the whole canvas
+      // because everything shared one root.
+      // Shift+F without a focused card is a no-op + toast hint.
       if (evt.key === "f" || evt.key === "F") {
         evt.preventDefault();
         const geos = getNodeGeos();
@@ -1389,18 +1392,18 @@ function BoardInner({
           `[canvas-board] F key: shift=${evt.shiftKey}, focusId=${focusId ?? "(none)"}, focusedState=${focusedCardId ?? "(none)"}, geos=${geos.length}, edges=${edges.length}`,
         );
         if (evt.shiftKey) {
-          const moves = tidyAllRoots(geos, edges, DEFAULT_TIDY_CONFIG);
-          if (moves.length > 0) applyTidyMoves(moves);
-          console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots`);
-        } else {
           if (!focusId) {
-            console.log(`[canvas-board] → F no-op (no focused card; use Shift+F for whole canvas)`);
-            onClipboardToast?.("info", "请先选中一张卡片，再按 F 整理它所在的子树（或 Shift+F 整理全画布）");
+            console.log(`[canvas-board] → Shift+F no-op (no focused card; use F for whole canvas)`);
+            onClipboardToast?.("info", "请先选中一张卡片，再按 Shift+F 整理它所在的子树（或 F 整理全画布）");
             return;
           }
           const moves = tidySubtree(focusId, geos, edges, DEFAULT_TIDY_CONFIG);
           if (moves.length > 0) applyTidyMoves(moves);
           console.log(`[canvas-board] → tidy SUBTREE from ${focusId}: ${moves.length} moves (this card stays pinned, descendants reflow)`);
+        } else {
+          const moves = tidyAllRoots(geos, edges, DEFAULT_TIDY_CONFIG);
+          if (moves.length > 0) applyTidyMoves(moves);
+          console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots`);
         }
         return;
       }
@@ -1452,6 +1455,9 @@ function BoardInner({
 
       // Tab / Shift+Tab — generate child / sibling note. preventDefault is
       // mandatory: otherwise the browser shifts keyboard focus out of the canvas.
+      // After insertion, schedule a global tidy (matches the F hotkey) so the
+      // new card lands in its mindmap-layout spot — the parent-local placement
+      // from computeChildPos/SiblingPos is just an interim anchor.
       if (evt.key === "Tab") {
         const focusId = focusedCardIdRef.current;
         if (!focusId) return;
@@ -1470,6 +1476,13 @@ function BoardInner({
           const color = parentNote?.color ?? DEFAULT_NOTE_COLOR;
           insertCardWithLayout(placement, focusId, color);
         }
+        // Defer one frame so React commits the new noteNode and ReactFlow
+        // rebuilds its nodes — otherwise getNodeGeos() wouldn't see the
+        // inserted card and tidyAllRoots would skip it.
+        requestAnimationFrame(() => {
+          const movesAll = tidyAllRoots(getNodeGeos(), dataRef.current.edges, DEFAULT_TIDY_CONFIG);
+          if (movesAll.length > 0) applyTidyMoves(movesAll);
+        });
         return;
       }
     };

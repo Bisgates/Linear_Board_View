@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.24.0 — Tab 键位调整 + 新卡片落位优化
+  - `F` ↔ `Shift+F` 互换：`F` 现为全局整理（tidyAllRoots，常用），`Shift+F` 改成只整理 focused 子树（tidySubtree，少用）
+  - Tab / Shift+Tab 插入新 card 后通过 `requestAnimationFrame` 自动跑全局 tidy，新卡片落到 mindmap 布局位置而非仅靠 parent-local 插入
+  - `computeSiblingPos`：取 parent 所有 sibling 中最大 Y + `siblingDy` 作为新卡片 Y，保证 tidy 后排在所有兄弟下方（而非仅 focused 下方）
+  - Toast 文案同步更新；`g`（编组/解组）保留不动
+
 - v0.23.0 — Agent_tmp tab: board 内启动 / 监控 / 对话 OPUS team agent
   - 新 tab `Agent_tmp`：自动列 OPUS team open issue，每张卡换成 `AgentIssueCard`（▶ 启动 / 状态徽章 / comment thread / 输入框；输入含 `merge` 关键字自动归 `[user:merge]`，否则 `[user:reply]`）
   - PTY agent runtime：dev plugin 起 long-lived `claude --dangerously-skip-permissions`（OAuth, 非 `-p`）per session，跑在独立 worktree；bracketed-paste 喂初始 prompt + 500ms 间隔单发 Enter 提交
