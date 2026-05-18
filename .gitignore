@@ -6,3 +6,4 @@ public/data/
 *.log
 *.tsbuildinfo
 arcs/
+.claude/
