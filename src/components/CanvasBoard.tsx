@@ -3,6 +3,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   ConnectionMode,
@@ -1199,8 +1200,39 @@ function BoardInner({
       // via buildNodes — we just need to clear the stale ones here so the
       // preserve-selected branch of the rebuild doesn't carry them through.
       setNodes((current) => current.map((n) => (n.selected ? { ...n, selected: false } : n)));
+      return newId;
     },
     [setData, focusNoteTextarea],
+  );
+
+  // After Tab / Shift+Tab tidy settles, make sure the freshly inserted card is
+  // actually on screen — otherwise the user has to pan around hunting for it.
+  // Pan only when the card lands outside the viewport (with a small margin),
+  // and keep current zoom so it doesn't disorient.
+  const ensureNodeVisible = useCallback(
+    (id: string, x: number, y: number, w: number, h: number) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const rect = wrapper.getBoundingClientRect();
+      const { x: vx, y: vy, zoom } = reactFlow.getViewport();
+      const cardLeft = x * zoom + vx;
+      const cardTop = y * zoom + vy;
+      const cardRight = cardLeft + w * zoom;
+      const cardBottom = cardTop + h * zoom;
+      const margin = 40;
+      const offScreen =
+        cardLeft < margin ||
+        cardTop < margin ||
+        cardRight > rect.width - margin ||
+        cardBottom > rect.height - margin;
+      if (!offScreen) return;
+      try {
+        reactFlow.setCenter(x + w / 2, y + h / 2, { zoom, duration: 350 });
+      } catch {
+        /* setCenter can throw on stale viewport; ignore */
+      }
+    },
+    [reactFlow],
   );
 
   // Mindmap "tidy" — apply a list of absolute (x, y) targets to the live
@@ -1446,18 +1478,19 @@ function BoardInner({
         if (!focusId) return;
         evt.preventDefault();
         const geos = getNodeGeos();
+        let newId: string | null = null;
         if (evt.shiftKey) {
           const placement = computeSiblingPos(focusId, dataRef.current, geos);
           if (!placement) return;
           const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = currentNote?.color ?? DEFAULT_NOTE_COLOR;
-          insertCardWithLayout(placement, placement.parentId, color);
+          newId = insertCardWithLayout(placement, placement.parentId, color);
         } else {
           const placement = computeChildPos(focusId, dataRef.current, geos);
           if (!placement) return;
           const parentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = parentNote?.color ?? DEFAULT_NOTE_COLOR;
-          insertCardWithLayout(placement, focusId, color);
+          newId = insertCardWithLayout(placement, focusId, color);
         }
         // Defer one frame so React commits the new noteNode and ReactFlow
         // rebuilds its nodes — otherwise getNodeGeos() wouldn't see the
@@ -1465,13 +1498,21 @@ function BoardInner({
         requestAnimationFrame(() => {
           const movesAll = tidyAllRoots(getNodeGeos(), dataRef.current.edges, DEFAULT_TIDY_CONFIG);
           if (movesAll.length > 0) applyTidyMoves(movesAll);
+          if (!newId) return;
+          // Final position = tidy move (if any) else the initial placement.
+          const move = movesAll.find((m) => m.id === newId);
+          const geo = getNodeGeos().find((g) => g.id === newId);
+          if (!geo) return;
+          const x = move?.x ?? geo.x;
+          const y = move?.y ?? geo.y;
+          ensureNodeVisible(newId, x, y, geo.w, geo.h);
         });
         return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData, applyTidyMoves]);
+  }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData, applyTidyMoves, ensureNodeVisible]);
 
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier
@@ -2099,7 +2140,7 @@ function BoardInner({
         deleteKeyCode={["Backspace", "Delete"]}
         {...SHARED_FLOW_PROPS}
       >
-        <Background gap={24} size={1} color="rgba(26,24,20,0.08)" />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="rgba(120,116,108,0.38)" />
         <ViewportPortal>
           {groupFrames.map((f) => (
             <div

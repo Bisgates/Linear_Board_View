@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.26.4 — canvas 背景换成跟随 viewport 的暖灰小圆点
+  - 起因：在 `body` 上加的 hairline grid 是 `background-image` 静态贴图，pan/zoom 时不跟手，看起来跟 xyflow 的 dots 双层叠加，质感乱
+  - 取舍：viewport-attached 的网格必须由 xyflow 自己的 `<Background>` 来画，body 不再叠任何 grid/dots（恢复成原来的 dot grain）
+  - 落点：`<Background>` 从默认 dots (gap=24, size=1, alpha=0.08) 调成 `Dots gap=16 size=1.6 color=rgba(120,116,108,0.38)` —— 暖灰小点，密度跟 16px 节奏对齐，pan/zoom 自然跟随
+
 - v0.26.3 — F tidy 间距/排序微调
   - `DEFAULT_TIDY_CONFIG.rootGapY` 100 → 200：F / Shift+F tidy 后各连通域 bounding box 之间的垂直 gap 翻倍，subtree 边界更清晰
   - `buildChildrenMap` 排序 fallback 从 `?? 0` 改成 `?? POSITIVE_INFINITY`：刚 Tab 出来的新节点 geo 还没经 ReactFlow store 测量时，排序会落到 sibling 行末尾而非开头，避免新增卡突然蹦到最上面
