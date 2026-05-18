@@ -40,7 +40,16 @@ export interface CheckResult {
 
 export async function checkForUpdate(): Promise<CheckResult> {
   const { check } = await import("@tauri-apps/plugin-updater");
-  const update = await check();
+  // proxy hardcoded — .app processes don't inherit shell HTTPS_PROXY, and
+  // GitHub is unreachable from this machine without going through Clash on
+  // 7890. Localhost-only so no leak risk; revisit if dev moves off Clash.
+  // 30s timeout — Tauri's check() will hang silently if the proxy is down.
+  const update = await Promise.race([
+    check({ timeout: 30_000, proxy: "http://127.0.0.1:7890" }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("check() timed out after 30s")), 30_000),
+    ),
+  ]) as Awaited<ReturnType<typeof check>>;
   if (!update) {
     // `check()` returns `null` when the running version >= the manifest's
     // version (i.e. already up-to-date).

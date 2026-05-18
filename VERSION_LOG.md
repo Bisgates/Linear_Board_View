@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.25.1 — Updater 走 Clash proxy + check 加 30s timeout
+  - `.app` 进程不继承 shell `HTTPS_PROXY`，本机直连 github.com 走不通，导致 v0.25.0 的 Check Update 点了无限转
+  - `src/lib/updater.ts` 给 `check()` 硬传 `proxy: "http://127.0.0.1:7890"`（localhost 写死，未来若 dev 不再用 Clash 再抽象）
+  - 同时套 `Promise.race` + 30s timeout，避免 plugin 静默挂起
+
 - v0.25.0 — App 内自动更新（Tauri + GitHub Releases）
   - Hamburger menu 新增 "Check Update" 项（仅 Tauri runtime 出现，浏览器隐藏）
   - 接 `tauri-plugin-updater` v2 + `@tauri-apps/plugin-updater` / `plugin-process`，私钥 `~/.tauri/board_updater.key`，公钥嵌入 `tauri.conf.json`
