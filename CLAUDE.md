@@ -89,6 +89,7 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 - 首次提交版本号 `0.0.1`。
 - agent 在执行 commit 前**先更新 `VERSION_LOG.md`**，把版本条目与代码改动放进**同一个 commit**，commit message 首行带上 `vX.Y.Z`。
 - `package.json` 的 `version` 字段也要同步到当前 `vX.Y.Z`。
+- **`git push` 后自动 `npm run release`**：只要这次 push 包含至少一个 `vX.Y.Z` 前缀的 commit（即版本有 bump），push 成功后 agent 必须接着跑 `npm run release` —— prod 打包 + 装 `~/Applications/Linear Board.app` + 发 GitHub Release，user 收到旧版的 in-app updater 提示一键升级。如果这次推的全是 chore/docs（没 bump 版本），则跳过 release。
 
 ## Arc Protocol
 - 任务管理协议：~/.claude/skills/arc/SKILL.md。
