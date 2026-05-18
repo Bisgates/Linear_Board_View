@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import pkg from "../../package.json";
+
+const APP_VERSION: string = pkg.version;
 
 interface Props {
   lastSyncAt: string | null;
@@ -120,6 +123,7 @@ export function TopBarMenu({
               <Separator />
               <MenuItem
                 label={checkUpdateBusy ? "Checking…" : "Check Update"}
+                hint={`v${APP_VERSION}`}
                 disabled={checkUpdateBusy}
                 onClick={() => {
                   if (checkUpdateBusy) return;

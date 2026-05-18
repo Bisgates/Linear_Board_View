@@ -2,6 +2,10 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.25.2 — Check Update 菜单项显示当前版本号
+  - 菜单 hint 区位显示 `v0.25.2`（取自 `package.json`），跟 Refresh 的 "synced 1d ago" 风格一致
+  - 顺手作为真实更新流的首次端到端测试：v0.25.1 装机 → 点 Check Update → 抓到 v0.25.2 → 自动装 + 重启
+
 - v0.25.1 — Updater 走 Clash proxy + check 加 30s timeout
   - `.app` 进程不继承 shell `HTTPS_PROXY`，本机直连 github.com 走不通，导致 v0.25.0 的 Check Update 点了无限转
   - `src/lib/updater.ts` 给 `check()` 硬传 `proxy: "http://127.0.0.1:7890"`（localhost 写死，未来若 dev 不再用 Clash 再抽象）
