@@ -2,6 +2,13 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.27.2 — F tidy 换成 slot-based 布局，浅叶子不再被深叶子兄弟挤同一行
+  - 症状：树 `W20 → 杂项 → {提采购需求, 慢速数据采集}` 加 `W20 → 3dgs`，按 F 后 3dgs（W20 的直接子，深度 1）和 慢速数据采集（杂项 的子，深度 2）在 flow Y 上几乎平齐，视觉上像 3dgs 被它兄弟的子树挤到同一行
+  - 根因：旧版 `tidySubtree` 用 d3-hierarchy 的 Reingold-Tilford，`apportion` 的 contour walk 只在两个子树**等深**时强制 `separation`；当兄弟子树更深时，深叶子可以"溜"到浅叶子旁边（实测 3dgs x=85、慢速数据采集 x=25，仅 60px 间隔，远小于配置的 cousin separation 243.75）
+  - 修：抛弃 d3-hierarchy，改纯递归 slot-based —— 每个**拓扑叶子**（无 children）按 cursor 独占一行（`cursor += h + vSpacing`），每个内部节点 Y 取首尾子节点中心的中点，整棵树深度 = `depth * hSpacing`。父节点天然垂直居中于直接子节点
+  - 验证：worktree 里跑 5/5 数学 self-test（严格 Y 递增、3dgs.top > 慢速数据采集.bottom、杂项 居中 2 子、W20 居中 杂项+3dgs、root 锚定不动），dev server 起来用户视觉确认 OK
+  - 文件：`src/lib/mindmapLayout.ts` 单文件，77+/70-；`buildChildrenMap` / `findRoot` / `findAllRoots` / `tidyAllRoots` 不动；d3-hierarchy import 删除
+
 - v0.27.1 — 修 U / Shift+U 死循环 + 写入 Agent Self-Test 开发规范
   - 症状：每按一次 U，`undoStack` pop 完立刻有 echo `setData pushed` 把状态又压回栈顶并清空 `redoStack`，导致 undo/redo 永远原地打转
   - 根因 1（StrictMode 双调用）：`useBoardState.setData` 把 `undoStack.push` / `redoStack = []` / `latestRef = next` / `schedule()` 这些副作用塞在 `setDataState(prev => ...)` 的 updater 里。React 18 dev StrictMode 会双调用 updater 检测纯度，导致每次 setData 把 `prev` push 两次。修：副作用搬到 updater 外，改成 `setDataState(next)` 直接传值，用 `latestRef.current` 当 "previous state" 来源

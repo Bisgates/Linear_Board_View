@@ -12,9 +12,14 @@
  *    "parent" by taking the smallest-id incoming edge's source; returns
  *    `parentId = null` for root nodes (no incoming edges) so the caller knows
  *    to skip adding an edge.
- *  - tidySubtree: Reingold-Tilford layout (via d3-hierarchy) for every
- *    descendant of `rootId`, anchored on the root's current position. Returns
- *    absolute positions to write back. Root itself is kept put.
+ *  - tidySubtree: slot-based recursive layout for every descendant of
+ *    `rootId`, anchored on the root's current position. Invariants:
+ *      (a) every topological LEAF (no outgoing children edges) gets its OWN
+ *          vertical row — a shallow leaf is never squeezed next to a deeper
+ *          leaf of a sibling's subtree;
+ *      (b) every internal/parent node is vertically centered between its
+ *          first and last direct children's centers.
+ *    Returns absolute positions to write back. Root keeps its anchor.
  *  - tidyAllRoots: tidySubtree on every root (no incoming edge), then stacks
  *    the resulting bounding boxes vertically (sorted by current Y) so the
  *    trees never overlap each other.
@@ -22,7 +27,6 @@
  * All functions are React-free / xyflow-free so the algorithm can be reasoned
  * about (and smoke-tested) in isolation.
  */
-import { hierarchy, tree as d3tree, type HierarchyNode } from "d3-hierarchy";
 
 export interface NodeGeo {
   id: string;
@@ -258,11 +262,6 @@ export interface TidyMove {
   y: number;
 }
 
-interface TreeDatum {
-  id: string;
-  geo: NodeGeo;
-}
-
 /**
  * Walk outgoing edges from `rootId` to build a parent→children adjacency map
  * restricted to the subtree, cycle-safe. Children are sorted by current Y so
@@ -334,9 +333,25 @@ export function findAllRoots(nodes: NodeGeo[], edges: EdgeLike[]): string[] {
 }
 
 /**
- * Reingold-Tilford layout (via d3-hierarchy) for the subtree rooted at
- * `rootId`, oriented left → right. Returns absolute positions for every
- * node in the subtree, anchored so the root keeps its current x/y.
+ * Slot-based recursive layout for the subtree rooted at `rootId`, oriented
+ * left → right. Returns absolute positions for every node in the subtree,
+ * anchored so the root keeps its current x/y.
+ *
+ * Algorithm (pure recursion):
+ *  - Walk the tree DFS in `buildChildrenMap` order (children sorted by
+ *    current Y so the user's visual ordering is preserved).
+ *  - LEAF: occupies one row at the running cursor; advances the cursor by
+ *    its own height + vSpacing.
+ *  - INTERNAL: recurses into each child in turn; the parent's center sits
+ *    at the midpoint of its first child's center and its last child's
+ *    center. The subtree's bottom is the max of (the cursor after the last
+ *    child) and (the parent's own bottom edge), so a tall centered parent
+ *    can still push the next sibling subtree down.
+ *
+ * Consequence: every leaf gets its own row, no matter how deep its cousins
+ * go. A shallow leaf at depth 1 will never share a row with a deeper leaf
+ * at depth 2+ of a sibling's subtree — the d3-hierarchy Reingold-Tilford
+ * contour walk used to allow that by sliding the shorter contour up.
  *
  * Singleton roots (no children) return an empty array — nothing to move.
  */
@@ -352,68 +367,60 @@ export function tidySubtree(
   const total = Array.from(childrenMap.values()).reduce((s, v) => s + v.length, 0);
   if (total === 0) return []; // root has no descendants; nothing to lay out
 
-  // d3-hierarchy expects a parent→child closure. Build the full datum tree.
-  const buildDatum = (id: string): TreeDatum & { children?: TreeDatum[] } => {
-    const geo = getNode(id, nodes) ?? { id, x: 0, y: 0, w: config.defaultW, h: config.defaultH };
+  // tempPositions[id] = top-left in the LOCAL frame where root's top-left
+  // is (0, 0). We translate to the root's actual flow position at the end.
+  const tempPositions = new Map<string, { x: number; y: number }>();
+
+  interface PlaceResult {
+    centerY: number; // vertical center of the node just placed
+    subtreeBottomY: number; // bottom edge of the subtree rooted here
+  }
+
+  const place = (id: string, depth: number, topY: number): PlaceResult => {
+    const geo = getNode(id, nodes);
+    const w = geo?.w || config.defaultW;
+    const h = geo?.h || config.defaultH;
+    const x = depth * config.hSpacing;
+
     const kids = childrenMap.get(id) ?? [];
-    if (kids.length === 0) return { id, geo };
-    return { id, geo, children: kids.map(buildDatum) };
+
+    if (kids.length === 0) {
+      // Leaf: occupies its own row at `topY`.
+      tempPositions.set(id, { x, y: topY });
+      return { centerY: topY + h / 2, subtreeBottomY: topY + h };
+    }
+
+    // Internal: lay each child subtree out in turn, walking the cursor.
+    let cursor = topY;
+    let firstChildCenter: number | null = null;
+    let lastChildCenter = 0;
+    for (const kid of kids) {
+      const r = place(kid, depth + 1, cursor);
+      if (firstChildCenter === null) firstChildCenter = r.centerY;
+      lastChildCenter = r.centerY;
+      cursor = r.subtreeBottomY + config.vSpacing;
+    }
+    // `cursor` now sits one vSpacing past the bottom of the last child.
+    // The actual subtree bottom is one vSpacing back.
+    const childrenBottomY = cursor - config.vSpacing;
+    const parentCenterY = ((firstChildCenter ?? 0) + lastChildCenter) / 2;
+    tempPositions.set(id, { x, y: parentCenterY - h / 2 });
+
+    const subtreeBottomY = Math.max(childrenBottomY, parentCenterY + h / 2);
+    return { centerY: parentCenterY, subtreeBottomY };
   };
-  const rootDatum = buildDatum(rootId);
 
-  const h = hierarchy<TreeDatum>(rootDatum);
+  place(rootId, 0, 0);
 
-  // d3-hierarchy's tree layout works in (x, y) where x is "across siblings"
-  // and y is "depth". We swap on read-out so depth runs horizontally.
-  //
-  // Sibling spacing strategy: nodeSize[0] = 1, and separation(a, b) returns
-  // the desired sibling-axis distance in pixels = (centerToCenter). For two
-  // siblings of heights ha, hb, centers should sit (ha + hb)/2 + vSpacing
-  // apart so their bboxes leave exactly `vSpacing` of clear gap.
-  //
-  // Cousins (sub-trees of two different parents) need a touch more breathing
-  // room — multiplied by 1.25 — so subtree boundaries stay visually distinct
-  // instead of mashing into the next group.
-  const layout = d3tree<TreeDatum>()
-    .nodeSize([1, config.hSpacing])
-    .separation((a, b) => {
-      const ha = a.data.geo.h || config.defaultH;
-      const hb = b.data.geo.h || config.defaultH;
-      const base = (ha + hb) / 2 + config.vSpacing;
-      const sameParent = a.parent === b.parent;
-      return sameParent ? base : base * 1.25;
-    });
-  layout(h as HierarchyNode<TreeDatum>);
-
-  // After layout: node.x = sibling-axis position (becomes flow Y),
-  //               node.y = depth-axis position (becomes flow X).
-  //
-  // Important: my separation() returns center-to-center distance in pixels,
-  // so d3 places nodes such that their CENTERS sit at the right gap. When we
-  // render, xyflow uses the position as TOP-LEFT. So a tall card placed at
-  // layout-y=Y and rendered at top=Y would extend (h/2) below where d3
-  // intended the bottom — overlapping a shorter neighbor below it.
-  //
-  // Fix: convert center → top-left on emit by subtracting h/2 (height) and
-  // w/2 (width). The anchor `dy` is computed against the root's intended
-  // top-left so the root still lands exactly where the user had it.
-  const layoutRoot = h as unknown as { x: number; y: number };
-  const rootW = root.w || config.defaultW;
-  const rootH = root.h || config.defaultH;
-  // Solve flow_y_for_root = root.y → root.y = layoutRoot.x - rootH/2 + dy
-  //                                        → dy = root.y - layoutRoot.x + rootH/2
-  const dx = root.x - layoutRoot.y + rootW / 2;
-  const dy = root.y - layoutRoot.x + rootH / 2;
+  // Translate so the root's top-left equals its original (x, y).
+  const rootLocal = tempPositions.get(rootId)!;
+  const dx = root.x - rootLocal.x;
+  const dy = root.y - rootLocal.y;
 
   const moves: TidyMove[] = [];
-  h.each((node) => {
-    const id = node.data.id;
-    const lx = (node as unknown as { x: number }).x;
-    const ly = (node as unknown as { y: number }).y;
-    const nw = node.data.geo.w || config.defaultW;
-    const nh = node.data.geo.h || config.defaultH;
-    moves.push({ id, x: ly - nw / 2 + dx, y: lx - nh / 2 + dy });
-  });
+  for (const [id, p] of tempPositions) {
+    moves.push({ id, x: p.x + dx, y: p.y + dy });
+  }
   return moves;
 }
 
