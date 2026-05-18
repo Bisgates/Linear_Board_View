@@ -1,0 +1,19 @@
+{
+  "productName": "Linear Board (dev)",
+  "identifier": "com.han.linearboard.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "Linear Board (dev)"
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "active": false
+    }
+  }
+}

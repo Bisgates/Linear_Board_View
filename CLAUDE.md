@@ -53,15 +53,48 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 - Agent UI tab + per-issue badges are kept in the codebase but **disabled** (`useAgentSessions()` returns an empty no-op stub; see `src/lib/useAgentSessions.ts` → `AGENT_DISABLED_MSG`).
 - 真实实现等 Rust pty 落地后再接回 —— spike `arcs/all/260516b_spike_rust_pty` 已 de-risk，待起 arc。
 
-## Development Mode
-- **默认 worktree 模式**：任何新功能开发都在新 worktree 里进行，不直接在主仓库 / `main` 分支动手。
-  - 流程：主窗口只调度 → 派 background agent 在新 worktree 起分支 + 独立 dev server → agent 自报端口 → user 在浏览器里验收 → user 明确 "ok / merge" 后再开 PR → 合并 → 清理 worktree。
-  - User 没确认前**绝不**开 PR，也不要 push 到远端。
-  - 同时最多 ~8 个并行 worktree。
-  - 例外：纯 docs / chore / 改 CLAUDE.md / 单文件配置改动这类零风险编辑，可以直接在主仓库改。
+## Development Mode (orchestrator / implementer / tester 三角)
+
+**主 agent 永远不直接写代码**，所有需求都派给 subagent。只有纯 docs / chore / 改 CLAUDE.md / 单文件配置这类零风险编辑可以在主仓库直接动；其他全部走 worktree。
+
+### 三个角色
+
+- **主 agent (orchestrator)**：常驻 user 主窗口。收需求 → 路由（见下）→ 派 implementer / tester subagent。**自己不动代码、不跑 dev、不开 PR 前不 push**。
+- **implementer subagent**：在 worktree 里写代码（每个 worktree 一个独立分支）。允许的自检：`tsc -b` / `npm run tauri:build`（仅当需要）/ 读文件 diff 自己实现的逻辑。**不跑 Quartz E2E，不起 dev app**。完成后写 ready 信号入队列，等 tester 验。
+- **tester subagent**：唯一持有 `com.han.linearboard.dev` 标识 + 共享 dev data dir（`~/Library/Application Support/com.han.linearboard.dev/data/`）的角色。串行处理队列，每次起 `npm run tauri:dev:shared` → Quartz `CGEventPostToPid` 驱动 E2E（套路见下面 Agent Self-Test）→ 写报告 → kill dev → 处理下一个。
+
+### 路由规则（主 agent 收到新需求时）
+
+1. 先看在跑的 implementer subagent 列表 + 各自 scope。
+2. 新需求**逻辑上属于某个 in-flight implementer 的范围** → `SendMessage` 把任务加派给该 agent，**不要**开新 worktree。
+3. 新需求是独立 feature → 起新 worktree + 新 implementer subagent。
+4. 同一 implementer 的多个任务**作为一组**进 tester 队列 —— 一次 tester run 覆盖整组，不是用户每发一条消息就排一次。
+5. 上限：同时 ~8 个并行 worktree。
+
+### Ready 队列（跨 worktree 共享，绝对路径）
+
+- 根目录：`~/.linear_board_test_queue/`
+  - `pending/<unix_ts>__<worktree-slug>.md` — implementer 完成时写入
+  - `processing/` — tester 接到后 `mv` 进来
+  - `done/` / `failed/` — tester 跑完按结果归档
+- 队列文件内容（implementer 写）：worktree 绝对路径、分支名、本次提交点（`git rev-parse HEAD`）、要 tester 验证的行为清单（"按 U 后 issue X 的 state 应回到 Backlog" 这种可机器判定的断言）。
+- 失败回弹：主 agent 发现 `failed/` 有新文件 → `SendMessage` 把报告递给原 implementer 修 → 修完重新写 `pending/`，**不要**新起 implementer。
+
+### 共享 dev runtime
+
+- `npm run tauri:dev:shared [-- --reset-data]` — `tauri dev` + override conf (`src-tauri/tauri.dev-shared.conf.json`)，identifier = `com.han.linearboard.dev`，数据目录 = `~/Library/Application Support/com.han.linearboard.dev/data/`，首次自动从 prod data dir seed。
+- 用户主 app (`~/Applications/Linear Board.app`) 在用 `com.han.linearboard` + 它自己的数据目录，**两条线物理隔离**，agent 在 dev 里怎么折腾都污染不到用户活数据。
+- tester 跑完一组任务后**不主动** `--reset-data`；要重置时再加 flag。
+- 因为 tester 是**串行单实例**，不存在多 dev app 抢同一 identifier 的并发问题。
+
+### 验收 → merge → 清理
+
+- tester 报告全绿 → 主 agent 通知 user "X 个 feature 待验收"。user 可自己 `open` 那个 dev app 视觉验收（identifier 一致，数据已就绪）。
+- user 明确 "ok / merge" 后 → 主 agent 进对应 worktree 开 PR / merge / 清 worktree。**user 没确认前绝不开 PR、不 push 远端**。
+- merge 后清理：`git worktree remove` + 删除该 worktree 对应 `pending/processing/done/failed` 里的归档文件（保留 `failed/` 里有诊断价值的留个一两周也行，定期清）。
 
 ## Agent Self-Test (HARD RULE)
-- **凡是改了 user-visible 行为的功能/修 bug，agent 必须自己跑通端到端测试再说"done"**，不能把"麻烦你测一下"扔回给 user。仅当某个验证项物理上无法自动化（e.g. 主观视觉判断、外部服务联调）才回退到 user 手测，并明确告知"X 我测了，Y 我没法自动测，你帮我看一下"。
+- **凡是改了 user-visible 行为的功能/修 bug，必须 tester subagent 跑通端到端再说"done"**，不能把"麻烦你测一下"扔回给 user。Implementer 自己只做 typecheck/build smoke，不跑 Quartz E2E —— E2E 走 tester（见上面 Development Mode 三角）。仅当某个验证项物理上无法自动化（e.g. 主观视觉判断、外部服务联调）才回退到 user 手测，tester 在报告里明确标"X 我测了，Y 没法自动测，请你看一下"。
 - **标准 loop**（v0.26.x undo/redo bug 调试时验证过）：
   1. **加临时 file log**：在 `src-tauri/src/lib.rs` 临时加一个 `debug_log_append(msg)` command（写到 `<data_root>/debug.log`），在 `tauriInvoke.ts` 加 `debugLogAppend()` wrapper，在被调试的代码路径里调用，让内部状态跨过 IPC 边界落到磁盘，Bash 端 `tail -f` 就能看。
   2. **Python + Quartz 直接发输入到 Tauri PID**：`pgrep -f "target/debug/linear-board"` 拿 PID，`Quartz.CGEventCreateKeyboardEvent` / `CGEventCreateMouseEvent` 造事件，**`Quartz.CGEventPostToPid(pid, ev)`** 投递。常用 virtual keycode：Esc=53, Tab=48, U=32, F=3, Space=49, Return=36；modifier flags `kCGEventFlagMaskShift` / `kCGEventFlagMaskCommand`；双击靠 `CGEventSetIntegerValueField(ev, kCGMouseEventClickState, n)`。
@@ -71,7 +104,7 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
   - **绝对不用** `osascript "set frontmost to true"` 抢焦点，也别用全局 `CGEventPost`（会被 WindowServer 路由到当前 key window，clobber user 的输入）。
   - **只用 `CGEventPostToPid(pid, ev)`**：事件直发到目标进程，user 当前 frontmost 是 ghostty / browser / 任何东西都不受影响。
   - **Tauri 窗口可以被盖住、推到别的 Space、移到屏幕角落，但不能 minimized**（WebKit 在 AXMinimized=true 时暂停事件处理，事件会被静默丢弃 —— spike 2026-05-18 已验证）。
-  - 长跑测试要彻底隔离的话，`npm run release:dev <suffix>` 起一份独立 identifier + data dir 的 app，agent 驱动那个，user 主 app 一根头发不动。
+  - tester 用 `npm run tauri:dev:shared`（identifier = `com.han.linearboard.dev`，独立 data dir，HMR），不要碰用户主 app 的 `com.han.linearboard`。`release:dev <suffix>` 留给"需要一份独立产物 + 隔离 data 的 long-running 验证"场景，不是日常 tester 流程。
 - **HMR 提示**：改了 `useBoardState` 之类的 hook，HMR 会让 App 重挂、所有 ref（含 undoStack / redoStack）清零；测之前先做几个新动作填栈，否则一上来按 U 全是 EMPTY。
 - **存在 memory**：`feedback_agent_self_test_loop.md` 有更详细的 spike 数据和边界条件。
 

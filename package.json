@@ -6,6 +6,7 @@
   "scripts": {
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:shared": "scripts/run-dev.sh",
     "tauri:build": "tauri build",
     "release": "scripts/release.sh prod",
     "release:dev": "scripts/release.sh dev"
