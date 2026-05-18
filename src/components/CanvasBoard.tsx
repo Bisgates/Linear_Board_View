@@ -30,6 +30,7 @@ import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
 import type { BoardData, BoardEdge, GroupBox, NoteImage } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
+import { generateCardId } from "../lib/cardId";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
   DEFAULT_LAYOUT_CONFIG,
@@ -50,6 +51,17 @@ const NODE_TYPES: NodeTypes = {
   agentIssue: AgentIssueCard as unknown as NodeTypes[string],
   note: NoteCard as unknown as NodeTypes[string],
 };
+
+// Mint a cardId for a brand-new note from the given `prev.noteNodes`. Every
+// note-creation site MUST call this so the App-level migrateCardIds effect
+// stays a true no-op — otherwise undo restores a cardId-less snapshot, the
+// migration effect fires, pushes a new state, and the undoStack gets stuck
+// (each U just bounces between "no cardId" and "fresh cardId").
+function mintCardIdFor(notes: ReadonlyArray<{ cardId?: string }>): string | undefined {
+  const taken = new Set<string>();
+  for (const n of notes) if (n.cardId) taken.add(n.cardId);
+  return generateCardId(new Date(), taken) ?? undefined;
+}
 const EDGE_TYPES: EdgeTypes = {
   labeled: LabeledEdge as unknown as EdgeTypes[string],
 };
@@ -1177,7 +1189,7 @@ function BoardInner({
           const sh = placement.shifts.find((s) => s.id === n.id);
           return sh ? { ...n, y: n.y + sh.dy } : n;
         });
-        noteNodes.push({ id: newId, body: "", x: placement.x, y: placement.y, color });
+        noteNodes.push({ id: newId, body: "", x: placement.x, y: placement.y, color, cardId: mintCardIdFor(prev.noteNodes) });
         const edges =
           parentEdgeSource !== null
             ? [
@@ -1205,27 +1217,29 @@ function BoardInner({
     [setData, focusNoteTextarea],
   );
 
-  // After Tab / Shift+Tab tidy settles, make sure the freshly inserted card is
-  // actually on screen — otherwise the user has to pan around hunting for it.
-  // Pan only when the card lands outside the viewport (with a small margin),
-  // and keep current zoom so it doesn't disorient.
+  // After Tab / Shift+Tab tidy settles, make sure the freshly inserted card
+  // lands in the visual comfort zone — the central 50% of the viewport
+  // (x: 25%–75%, y: 25%–75%). New cards should never hug the edge or escape
+  // off-screen. If the card's center is outside that box, pan (keeping zoom)
+  // so it lands at viewport center.
   const ensureNodeVisible = useCallback(
     (id: string, x: number, y: number, w: number, h: number) => {
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
       const rect = wrapper.getBoundingClientRect();
       const { x: vx, y: vy, zoom } = reactFlow.getViewport();
-      const cardLeft = x * zoom + vx;
-      const cardTop = y * zoom + vy;
-      const cardRight = cardLeft + w * zoom;
-      const cardBottom = cardTop + h * zoom;
-      const margin = 40;
-      const offScreen =
-        cardLeft < margin ||
-        cardTop < margin ||
-        cardRight > rect.width - margin ||
-        cardBottom > rect.height - margin;
-      if (!offScreen) return;
+      const cardCX = (x + w / 2) * zoom + vx;
+      const cardCY = (y + h / 2) * zoom + vy;
+      const zoneLeft = rect.width * 0.25;
+      const zoneRight = rect.width * 0.75;
+      const zoneTop = rect.height * 0.25;
+      const zoneBottom = rect.height * 0.75;
+      const inZone =
+        cardCX >= zoneLeft &&
+        cardCX <= zoneRight &&
+        cardCY >= zoneTop &&
+        cardCY <= zoneBottom;
+      if (inZone) return;
       try {
         reactFlow.setCenter(x + w / 2, y + h / 2, { zoom, duration: 350 });
       } catch {
@@ -1479,18 +1493,21 @@ function BoardInner({
         evt.preventDefault();
         const geos = getNodeGeos();
         let newId: string | null = null;
+        let placement: { x: number; y: number } | null = null;
         if (evt.shiftKey) {
-          const placement = computeSiblingPos(focusId, dataRef.current, geos);
-          if (!placement) return;
+          const p = computeSiblingPos(focusId, dataRef.current, geos);
+          if (!p) return;
+          placement = { x: p.x, y: p.y };
           const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = currentNote?.color ?? DEFAULT_NOTE_COLOR;
-          newId = insertCardWithLayout(placement, placement.parentId, color);
+          newId = insertCardWithLayout(p, p.parentId, color);
         } else {
-          const placement = computeChildPos(focusId, dataRef.current, geos);
-          if (!placement) return;
+          const p = computeChildPos(focusId, dataRef.current, geos);
+          if (!p) return;
+          placement = { x: p.x, y: p.y };
           const parentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = parentNote?.color ?? DEFAULT_NOTE_COLOR;
-          newId = insertCardWithLayout(placement, focusId, color);
+          newId = insertCardWithLayout(p, focusId, color);
         }
         // Defer one frame so React commits the new noteNode and ReactFlow
         // rebuilds its nodes — otherwise getNodeGeos() wouldn't see the
@@ -1498,14 +1515,18 @@ function BoardInner({
         requestAnimationFrame(() => {
           const movesAll = tidyAllRoots(getNodeGeos(), dataRef.current.edges, DEFAULT_TIDY_CONFIG);
           if (movesAll.length > 0) applyTidyMoves(movesAll);
-          if (!newId) return;
-          // Final position = tidy move (if any) else the initial placement.
+          if (!newId || !placement) return;
+          // Final position = tidied move, falling back to ReactFlow geo, then
+          // the original placement (ReactFlow may not have measured the brand
+          // new node yet when this RAF fires — never skip the pan because of
+          // that).
           const move = movesAll.find((m) => m.id === newId);
           const geo = getNodeGeos().find((g) => g.id === newId);
-          if (!geo) return;
-          const x = move?.x ?? geo.x;
-          const y = move?.y ?? geo.y;
-          ensureNodeVisible(newId, x, y, geo.w, geo.h);
+          const x = move?.x ?? geo?.x ?? placement.x;
+          const y = move?.y ?? geo?.y ?? placement.y;
+          const w = geo?.w ?? DEFAULT_LAYOUT_CONFIG.defaultW;
+          const h = geo?.h ?? DEFAULT_LAYOUT_CONFIG.defaultH;
+          ensureNodeVisible(newId, x, y, w, h);
         });
         return;
       }

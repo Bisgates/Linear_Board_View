@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.27.0 — Tab 新卡自动 pan 到视觉舒适区
+  - 痛点：Tab / Shift+Tab 出来的新卡常常落到屏幕外（尤其链路一路向右），需要手动 pan 找它
+  - 新增 `ensureNodeVisible(id, x, y, w, h)`：用 wrapper rect + viewport zoom 判断新卡中心点是否落在视口中央 50% 框内（x ∈ 25%–75%、y ∈ 25%–75%），不在就 `reactFlow.setCenter(card center, zoom 不变, 350ms)` 平滑拉到正中
+  - `insertCardWithLayout` 返回 newId；Tab handler 在 tidy 完成的 RAF 收尾处算最终位置（tidy move → ReactFlow geo → placement 三级 fallback，避免 ReactFlow 还没测量到新节点就跳过 pan）调 `ensureNodeVisible`
+  - 单文件 UX 微调，直接在主仓库改，未开 worktree
+
 - v0.26.4 — canvas 背景换成跟随 viewport 的暖灰小圆点
   - 起因：在 `body` 上加的 hairline grid 是 `background-image` 静态贴图，pan/zoom 时不跟手，看起来跟 xyflow 的 dots 双层叠加，质感乱
   - 取舍：viewport-attached 的网格必须由 xyflow 自己的 `<Background>` 来画，body 不再叠任何 grid/dots（恢复成原来的 dot grain）
