@@ -4,50 +4,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Single-user web app that pulls open issues from one Linear workspace onto a freeform pan/zoom canvas (`@xyflow/react`). Drag changes spatial position only; field edits go through inline controls in the detail panel and are written back via Linear's GraphQL API. Authoritative scope/non-goals: `PROJECT_STATEMENT.md`.
+Single-user macOS app (Tauri) that pulls open issues from one Linear workspace onto a freeform pan/zoom canvas (`@xyflow/react`). Drag changes spatial position only; field edits go through inline controls in the detail panel and are written back via Linear's GraphQL API (Rust side). Authoritative scope/non-goals: `PROJECT_STATEMENT.md`.
 
 ## Commands
 
-- `npm run dev` — start Vite dev server. Vite plugin `linearApiPlugin` mounts `/api/refetch` (GET) and `/api/issue/:id` (PATCH) middleware that talks to Linear using `LINEAR_API_KEY` from `.env`. Without that key, `/api/*` returns 500 but the static UI still loads from the existing snapshot.
-- `npm run build` — `tsc -b` (project references) then `vite build`. Both `tsconfig.app.json` and `tsconfig.node.json` must typecheck.
-- `npm run preview` — serve the production build. Note: no API middleware here, so mutations and refresh won't work in preview.
-- `npm run fetch` — standalone `tsx scripts/fetchSnapshot.ts`; same Linear pull as `/api/refetch`, writes to `public/data/issues.json`. Run this once before `dev` if the snapshot doesn't exist yet (the browser fetches `/data/issues.json` on load and will error otherwise).
-- `npm run tauri:dev` — Tauri 窗口 + vite (`vite.tauri.config.ts`) + Rust 后端。**不挂** `linearApiPlugin`，靠 `src/lib/tauriBridge.ts` 把 `/api/*` 路由到 Tauri commands。agent 功能在此 runtime 下线（占位）。
+- `npm run tauri:dev` — Tauri 窗口 + vite + Rust 后端，热重载。前端走 `vite` (port 1420)，后端 commands 见 `src-tauri/src/lib.rs` / `linear.rs`。日常开发就这一条。
 - `npm run tauri:build` — 产 `.app` 到 `src-tauri/target/release/bundle/macos/Linear Board.app`。
 - `npm run release` — prod release：跑 `tauri:build` 然后把 .app 装到 `~/Applications/Linear Board.app`（旧的 mv 成 `*.bak-YYYYMMDD-HHMMSS` 备份）。日常 ship 走这条，不要直接 `tauri:build` 后手动 cp。
-- `npm run release:dev <suffix> [-- --reset-data]` — worktree dev release：partial-override conf 把 productName / identifier 改成 `Linear Board <suffix>` / `com.han.linearboard.dev.<slug>`，产物留在 `src-tauri/target/release/bundle/macos/` 不进 `~/Applications/`，data dir 独立 (`~/Library/Application Support/com.han.linearboard.dev.<slug>/data/`) 且默认保留改动；细节见 [`docs/development_modes.md`](docs/development_modes.md) 的 "Release flow" 段。
+- `npm run release:dev <suffix> [-- --reset-data]` — worktree dev release：partial-override conf 把 productName / identifier 改成 `Linear Board <suffix>` / `com.han.linearboard.dev.<slug>`，产物留在 `src-tauri/target/release/bundle/macos/` 不进 `~/Applications/`，data dir 独立 (`~/Library/Application Support/com.han.linearboard.dev.<slug>/data/`) 且默认保留改动。
 - No test runner, linter, or formatter is configured. Don't invent commands.
 
-## Runtime Targets (临时 dual-stack)
+## Runtime
 
-> 2026-05-16 起项目同时跑两个 runtime — 浏览器 (`npm run dev`) 和 macOS Tauri 壳 (`tauri:dev` / `.app`)。详见 [`docs/development_modes.md`](docs/development_modes.md)。
+Single Tauri runtime. 浏览器开发模式（`npm run dev` + Node-side `linearApiPlugin`）已于 v0.26.0 退役 —— dual-stack 时期遗留的 `tauriBridge.ts` shim / `linearApiPlugin.ts` / 双份 vite config / `@linear/sdk` + `dotenv` + `tsx` + `node-pty` deps 全部清掉。新增 endpoint = 写一个 `#[tauri::command]` 注册到 `src-tauri/src/lib.rs::invoke_handler`，然后在 `src/lib/tauriInvoke.ts` 加一个 typed wrapper 调 `invoke()`。
 
-**当前姿势**：浏览器是主开发环境（hot reload + Chrome devtools），Tauri 是 packaging + 日常使用目标。`npm run dev` 必须始终保留完整功能 —— 任何 Tauri 化改动都不能破坏浏览器开发流。
+数据路径：`~/Library/Application Support/com.han.linearboard/data/`（生产）或 `…/com.han.linearboard.dev.<slug>/data/`（dev release）。
 
-**三处同步约定**（dual-stack 的税）：每加一个 `/api/*` endpoint，下面三处都要写：
-1. `src/server/linearApiPlugin.ts` — Node 端 route handler，给浏览器
-2. `src-tauri/src/lib.rs` — `#[tauri::command]` + 注册到 `invoke_handler`，给 Tauri
-3. `src/lib/tauriBridge.ts` 的 `dispatch()` — path 匹配 + `invoke()` 调 Rust command，给前端透明路由
-
-**最易漏**：Rust 端。每写完一个新 endpoint 自检三处都有。
-
-**数据路径差异**：浏览器读写 `public/data/`，Tauri 读写 `~/Library/Application Support/com.han.linearboard/data/`。两份数据不自动同步。
-
-**何时退役 dual-stack**：Linear API + agent (`node-pty`) 都迁完 Rust 后，`linearApiPlugin.ts` 整个删掉。当前迁移进度：
-- ✅ `boardStore` 已 Rust
-- 🚧 Linear API (arc `260516c_migrate_linear_to_rust` 进行中) — 直接动因是 `@linear/sdk` 在 webview 跑不起来（Node 模块被 externalise）
-- 📋 Agent (`node-pty` / `agentPoller`) — spike `260516b_spike_rust_pty` 已 de-risk，待起 arc
+Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 Chrome devtools）。
 
 ## Architecture
 
 ### Snapshot is the source of truth on the client
-- Server writes `public/data/issues.json` (an entire `SnapshotFile`: `issues`, `pages`, `elapsedMs`, `fetchedAt`, plus `meta.workflowStates`). The browser fetches this file directly — no streaming, no incremental sync.
-- `fetchAllIssues` filters to open state types only (`backlog | unstarted | started`); "Done"/"Cancelled" issues never enter the snapshot. `fetchAllWorkflowStates` is fetched separately and stored under `meta.workflowStates` so the state-picker can offer states (e.g. "Done") whose issues aren't in the snapshot.
-- `src/App.tsx` holds the single `snapshot` state. `IssueRecord` (`src/linear/types.ts`) is the canonical shape; `fetchIssues.ts` and `updateIssue.ts` both transform raw Linear GraphQL into this exact shape via `toRecord`-style mappers — keep them in sync or optimistic UI breaks.
+- Rust 写入 `<data>/issues.json` (an entire `SnapshotFile`: `issues`, `pages`, `elapsedMs`, `fetchedAt`, plus `meta.workflowStates`)；前端通过 `invoke("read_issues_snapshot")` 读。
+- `linear_fetch_all_issues` (Rust) filters to open state types only (`backlog | unstarted | started`); "Done"/"Cancelled" issues never enter the snapshot. `linear_fetch_workflow_states` is invoked separately and stored under `meta.workflowStates` so the state-picker can offer states (e.g. "Done") whose issues aren't in the snapshot.
+- `src/App.tsx` holds the single `snapshot` state. `IssueRecord` (`src/linear/types.ts`) is the canonical shape; both the Rust GraphQL client (`src-tauri/src/linear.rs`) and frontend optimistic updates produce this exact shape — keep them in sync or optimistic UI breaks.
 
 ### Optimistic mutation + rollback
-- `App.mutate(id, patch)` (`src/App.tsx`) is the one path for field writes. It (1) builds an optimistic `IssueRecord` by looking up referenced entities (states, projects, cycles, assignees, labels) from the in-memory snapshot, augmenting `states` with `meta.workflowStates` for cross-snapshot picks; (2) applies it locally; (3) `PATCH /api/issue/:id`; (4) replaces with the server's authoritative record, or rolls back to `prevIssue` on failure and surfaces a toast.
-- `IssuePatch` (`src/linear/updateIssue.ts`) is the wire format. To add a new editable field, extend `IssuePatch`, the lookup block in `mutate`, the GraphQL mutation input, and `toRecord`.
+- `App.mutate(id, patch)` (`src/App.tsx`) is the one path for field writes. It (1) builds an optimistic `IssueRecord` by looking up referenced entities (states, projects, cycles, assignees, labels) from the in-memory snapshot, augmenting `states` with `meta.workflowStates` for cross-snapshot picks; (2) applies it locally; (3) calls `updateIssue(id, patch)` from `tauriInvoke.ts` → `linear_update_issue` Rust command; (4) replaces with the authoritative record, or rolls back to `prevIssue` on failure and surfaces a toast.
+- `IssuePatch` (`src/linear/updateIssue.ts`) is the wire format. To add a new editable field, extend `IssuePatch`, the lookup block in `mutate`, the Rust mutation input, and the Rust `toRecord` mapper.
 
 ### Canvas, positions, layout
 - `Board.tsx` wraps `ReactFlow` and treats every issue as a `type: "issue"` node rendered by `IssueCard`. Edges are derived purely from `parentId`/`childrenIds` within the filtered set.
@@ -60,9 +44,14 @@ Single-user web app that pulls open issues from one Linear workspace onto a free
 - `DetailPanel` is where every inline editor lives; it calls `onMutate` with a single-field `IssuePatch` per save.
 - `?perf=1` in the URL clones existing issues up to 200 (`src/lib/synthetic.ts`) for the 200-card perf target from `PROJECT_STATEMENT.md`. Synthetic ids are suffixed `__syn_<n>` — be aware when debugging.
 
-### Dev-time API plugin
-- `src/server/linearApiPlugin.ts` is a Vite plugin (`apply: "serve"` only) that injects connect-style middleware. It instantiates one `LinearClient` per process from `process.env.LINEAR_API_KEY` and uses `client.client.rawRequest` for all GraphQL calls — there is no schema-typed SDK usage. The snapshot file path is resolved relative to `__dirname`, so don't move the plugin without updating it.
-- The API key never reaches the browser; the client only sees `/api/*` and `/data/issues.json`.
+### Tauri command surface
+- `src-tauri/src/lib.rs` registers ~21 `#[tauri::command]`s (snapshot R/W, day / custom view manifests + board files, all-issues board, `open_path`, Linear key resolution).
+- `src-tauri/src/linear.rs` owns the Rust GraphQL client (`reqwest` + handwritten queries) + 4 Linear commands: `linear_fetch_all_issues` / `linear_fetch_workflow_states` / `linear_update_issue` / `linear_create_issue_comment`.
+- Frontend never `invoke()`s directly; everything routes through `src/lib/tauriInvoke.ts` so the call sites stay typed and the command names live in one file.
+
+## Agent management (placeholder)
+- Agent UI tab + per-issue badges are kept in the codebase but **disabled** (`useAgentSessions()` returns an empty no-op stub; see `src/lib/useAgentSessions.ts` → `AGENT_DISABLED_MSG`).
+- 真实实现等 Rust pty 落地后再接回 —— spike `arcs/all/260516b_spike_rust_pty` 已 de-risk，待起 arc。
 
 ## Development Mode
 - **默认 worktree 模式**：任何新功能开发都在新 worktree 里进行，不直接在主仓库 / `main` 分支动手。

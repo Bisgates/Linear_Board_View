@@ -2,6 +2,18 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.26.0 — 删 web，独留 Tauri runtime
+  - 放弃 dual-stack：browser dev server + `linearApiPlugin` 整条路径全部退役，仓库只剩一个 Tauri runtime
+  - 删 `src/server/` (linearApiPlugin / agentPoller / agentSessions / boardStore / node-pty.d.ts) + `scripts/{fetchSnapshot,agent_post}.ts` + `src/linear/{createComment,fetchIssues}.ts` —— ~1700 LOC 净减
+  - 删 `src/lib/tauriBridge.ts` (global-fetch monkey-patch) + `linearSdkStub.ts`；新增 `src/lib/tauriInvoke.ts` 集中所有 Tauri command typed wrapper
+  - 前端 8 处 `fetch("/api/...")` / `fetch("/data/...")` 全改为直 `invoke()`；`useBoardState` 接口从 endpoint 字符串改成 `BoardSource` 判别联合
+  - 合并 `vite.config.ts` + `vite.tauri.config.ts` → 单一 `vite.config.ts`；`tauri.conf.json` `beforeDev/Build` 直接调 `vite` / `tsc -b && vite build`
+  - 删 npm scripts：`dev` / `build` / `preview` / `fetch` / `tauri:frontend-dev` / `tauri:frontend-build`；保留 `tauri` / `tauri:dev` / `tauri:build` / `release` / `release:dev`
+  - 删 npm deps：`@linear/sdk` / `dotenv` / `tsx` / `node-pty`
+  - Agent 功能 UI 保留 placeholder（option A）—— `useAgentSessions` stub 返回常量 disabled；Rust pty 实现等将来另起 arc
+  - 删 `docs/development_modes.md`；`CLAUDE.md` 去掉 "Runtime Targets / 三处同步约定 / Dev-time API plugin" 整段
+  - Bundle 443.63KB / 265 modules（v0.25.2 是 447KB / 同等模块数）
+
 - v0.25.2 — Check Update 菜单项显示当前版本号
   - 菜单 hint 区位显示 `v0.25.2`（取自 `package.json`），跟 Refresh 的 "synced 1d ago" 风格一致
   - 顺手作为真实更新流的首次端到端测试：v0.25.1 装机 → 点 Check Update → 抓到 v0.25.2 → 自动装 + 重启
