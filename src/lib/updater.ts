@@ -2,7 +2,7 @@
 //
 // Thin façade around `@tauri-apps/plugin-updater` so the React UI doesn't have
 // to know about plugin internals. Only meaningful in the Tauri runtime — call
-// sites must gate on `isTauri()` from `./tauriBridge` before touching anything
+// sites must gate on `isTauri()` from `./tauriInvoke` before touching anything
 // here. The dynamic imports below also guarantee that the plugin's JS is never
 // pulled into the browser bundle's eager paths (no `window.__TAURI_INTERNALS__`
 // → `check()` is never invoked → tree-shaker keeps the deps dormant).

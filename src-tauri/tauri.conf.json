@@ -4,8 +4,8 @@
   "version": "0.25.2",
   "identifier": "com.han.linearboard",
   "build": {
-    "beforeDevCommand": "npm run tauri:frontend-dev",
-    "beforeBuildCommand": "npm run tauri:frontend-build",
+    "beforeDevCommand": "vite",
+    "beforeBuildCommand": "tsc -b && vite build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
