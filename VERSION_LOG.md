@@ -2,6 +2,14 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.27.1 — 修 U / Shift+U 死循环 + 写入 Agent Self-Test 开发规范
+  - 症状：每按一次 U，`undoStack` pop 完立刻有 echo `setData pushed` 把状态又压回栈顶并清空 `redoStack`，导致 undo/redo 永远原地打转
+  - 根因 1（StrictMode 双调用）：`useBoardState.setData` 把 `undoStack.push` / `redoStack = []` / `latestRef = next` / `schedule()` 这些副作用塞在 `setDataState(prev => ...)` 的 updater 里。React 18 dev StrictMode 会双调用 updater 检测纯度，导致每次 setData 把 `prev` push 两次。修：副作用搬到 updater 外，改成 `setDataState(next)` 直接传值，用 `latestRef.current` 当 "previous state" 来源
+  - 根因 2（migration echo）：4 个 note 创建站点（Tab/Shift+Tab、双击空 pane、剪贴板粘贴、图片粘贴）都没 mint `cardId`，App.tsx 的 `migrateCardIds` effect 监听 `data.noteNodes`，按 U 回到"刚创建、缺 cardId"的快照时立刻补一个回去 → setData → 把刚 pop 的状态又压回 undoStack 并清空 redoStack。修：4 处都在 setData updater 内调 `mintCardIdFor(prev.noteNodes)` 现拿 cardId，migration effect 永远走 short-circuit
+  - 验证（agent 自跑 + 没打扰 user）：Python + `Quartz.CGEventPostToPid` 直接给 Tauri 进程发键鼠事件 + 临时 `debug_log_append` Tauri 命令把内部栈状态写到 `<data_root>/debug.log` → 三场景（双击建 note / Tab 子 note / 文本编辑）× {U×3, Shift+U×3} 全部 undoStack/redoStack 严格反向 1-1，无 echo
+  - CLAUDE.md 新增 "Agent Self-Test (HARD RULE)"：今后所有改 user-visible 行为的功能/bugfix，agent 必须自己跑通端到端再说 done；标准 loop（file log + Quartz PostToPid + 后台执行边界条件 Tauri 窗口不能 minimized）写死成规范
+  - spike 边界：`CGEventPostToPid` 实测可工作于 "Tauri 窗口可见但不在前台" —— 用 ghostty 当前台、发 F 键 500ms 内触发 tidy + 数据文件 mtime 更新；窗口 minimized 时 WebKit 暂停事件处理，事件被静默丢弃
+
 - v0.27.0 — Tab 新卡自动 pan 到视觉舒适区
   - 痛点：Tab / Shift+Tab 出来的新卡常常落到屏幕外（尤其链路一路向右），需要手动 pan 找它
   - 新增 `ensureNodeVisible(id, x, y, w, h)`：用 wrapper rect + viewport zoom 判断新卡中心点是否落在视口中央 50% 框内（x ∈ 25%–75%、y ∈ 25%–75%），不在就 `reactFlow.setCenter(card center, zoom 不变, 350ms)` 平滑拉到正中

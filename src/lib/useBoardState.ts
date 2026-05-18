@@ -93,19 +93,26 @@ export function useBoardState(
 
   const setData = useCallback<UseBoardState["setData"]>(
     (updater) => {
-      setDataState((prev) => {
-        const next =
-          typeof updater === "function" ? (updater as (p: BoardData) => BoardData)(prev) : updater;
-        if (next === prev) return prev;
-        undoStack.current.push(prev);
-        if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
-        // Fresh action invalidates the redo history — once you diverge from
-        // the undone timeline, the previously-redoable states are gone.
-        redoStack.current = [];
-        latestRef.current = next;
-        schedule();
-        return next;
-      });
+      // IMPORTANT: side effects (undo/redo stacks, save scheduler) must live
+      // OUTSIDE the setDataState updater. React 18 StrictMode double-invokes
+      // setState updaters in dev to catch impure ones — if we pushed to
+      // undoStack inside the updater, every user action would land twice and
+      // each U press would only undo half a step (alternating with a visual
+      // no-op). Instead we use latestRef as the source of truth for "current
+      // state", and call setDataState with a direct value (which is not
+      // double-invoked).
+      const prev = latestRef.current;
+      const next =
+        typeof updater === "function" ? (updater as (p: BoardData) => BoardData)(prev) : updater;
+      if (next === prev) return;
+      undoStack.current.push(prev);
+      if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+      // Fresh action invalidates the redo history — once you diverge from
+      // the undone timeline, the previously-redoable states are gone.
+      redoStack.current = [];
+      latestRef.current = next;
+      schedule();
+      setDataState(next);
     },
     [schedule],
   );

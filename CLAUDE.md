@@ -60,6 +60,21 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
   - 同时最多 ~8 个并行 worktree。
   - 例外：纯 docs / chore / 改 CLAUDE.md / 单文件配置改动这类零风险编辑，可以直接在主仓库改。
 
+## Agent Self-Test (HARD RULE)
+- **凡是改了 user-visible 行为的功能/修 bug，agent 必须自己跑通端到端测试再说"done"**，不能把"麻烦你测一下"扔回给 user。仅当某个验证项物理上无法自动化（e.g. 主观视觉判断、外部服务联调）才回退到 user 手测，并明确告知"X 我测了，Y 我没法自动测，你帮我看一下"。
+- **标准 loop**（v0.26.x undo/redo bug 调试时验证过）：
+  1. **加临时 file log**：在 `src-tauri/src/lib.rs` 临时加一个 `debug_log_append(msg)` command（写到 `<data_root>/debug.log`），在 `tauriInvoke.ts` 加 `debugLogAppend()` wrapper，在被调试的代码路径里调用，让内部状态跨过 IPC 边界落到磁盘，Bash 端 `tail -f` 就能看。
+  2. **Python + Quartz 直接发输入到 Tauri PID**：`pgrep -f "target/debug/linear-board"` 拿 PID，`Quartz.CGEventCreateKeyboardEvent` / `CGEventCreateMouseEvent` 造事件，**`Quartz.CGEventPostToPid(pid, ev)`** 投递。常用 virtual keycode：Esc=53, Tab=48, U=32, F=3, Space=49, Return=36；modifier flags `kCGEventFlagMaskShift` / `kCGEventFlagMaskCommand`；双击靠 `CGEventSetIntegerValueField(ev, kCGMouseEventClickState, n)`。
+  3. **loop**：发输入 → `sleep 0.3–0.5s`（给 200ms debounced save + RAF tidy 留时间）→ 读 `debug.log` / 数据文件 mtime → diff 预期 → 迭代。
+  4. **绿了就把临时调试 infra 拆掉**（debug_log_append command + JS wrapper + dlog 调用都删），别让它跟着 ship。
+- **后台执行约束（不能影响 user 用电脑）**：
+  - **绝对不用** `osascript "set frontmost to true"` 抢焦点，也别用全局 `CGEventPost`（会被 WindowServer 路由到当前 key window，clobber user 的输入）。
+  - **只用 `CGEventPostToPid(pid, ev)`**：事件直发到目标进程，user 当前 frontmost 是 ghostty / browser / 任何东西都不受影响。
+  - **Tauri 窗口可以被盖住、推到别的 Space、移到屏幕角落，但不能 minimized**（WebKit 在 AXMinimized=true 时暂停事件处理，事件会被静默丢弃 —— spike 2026-05-18 已验证）。
+  - 长跑测试要彻底隔离的话，`npm run release:dev <suffix>` 起一份独立 identifier + data dir 的 app，agent 驱动那个，user 主 app 一根头发不动。
+- **HMR 提示**：改了 `useBoardState` 之类的 hook，HMR 会让 App 重挂、所有 ref（含 undoStack / redoStack）清零；测之前先做几个新动作填栈，否则一上来按 U 全是 EMPTY。
+- **存在 memory**：`feedback_agent_self_test_loop.md` 有更详细的 spike 数据和边界条件。
+
 ## Pride Versioning
 - 版本号格式 `x.y.z`：
   - `x` = **proud**：值得骄傲的里程碑（大型完成、重要发布、关键能力解锁）。

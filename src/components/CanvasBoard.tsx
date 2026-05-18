@@ -1650,11 +1650,12 @@ function BoardInner({
               id = shortId("n");
               localIdxToNewId[idx] = id;
             }
-            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean } = {
+            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
               id,
               body: it.body,
               x,
               y,
+              cardId: mintCardIdFor(noteNodes),
             };
             if (it.color) note.color = it.color;
             if (it.working) note.working = true;
@@ -1798,6 +1799,7 @@ function BoardInner({
                 y: center.y,
                 images: [newImg],
                 textSegments: ["", ""],
+                cardId: mintCardIdFor(prev.noteNodes),
               },
             ],
           }));
@@ -1966,7 +1968,7 @@ function BoardInner({
       const id = shortId("n");
       setData((prev) => ({
         ...prev,
-        noteNodes: [...prev.noteNodes, { id, body: "", x: pt.x, y: pt.y }],
+        noteNodes: [...prev.noteNodes, { id, body: "", x: pt.x, y: pt.y, cardId: mintCardIdFor(prev.noteNodes) }],
       }));
       setEditingNoteId(id);
       setFocusedCardId(id);
