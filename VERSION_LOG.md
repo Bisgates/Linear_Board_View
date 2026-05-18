@@ -2,6 +2,10 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.26.3 — F tidy 间距/排序微调
+  - `DEFAULT_TIDY_CONFIG.rootGapY` 100 → 200：F / Shift+F tidy 后各连通域 bounding box 之间的垂直 gap 翻倍，subtree 边界更清晰
+  - `buildChildrenMap` 排序 fallback 从 `?? 0` 改成 `?? POSITIVE_INFINITY`：刚 Tab 出来的新节点 geo 还没经 ReactFlow store 测量时，排序会落到 sibling 行末尾而非开头，避免新增卡突然蹦到最上面
+
 - v0.26.2 — `scripts/release.sh` 自动 source `.env`
   - 之前 `npm run release` 启动时 env 没有 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，导致签名步骤直接 die；用户得手动 `set -a && source .env && set +a` 或写进 shell rc
   - 修：release.sh 在 cd 到 repo root 后立刻 `set -a; . "$REPO_ROOT/.env"; set +a`（如果文件存在）。一行 if-fi 块，无外部依赖（不需要 dotenv-cli）

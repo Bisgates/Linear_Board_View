@@ -246,7 +246,7 @@ export interface TidyConfig {
 export const DEFAULT_TIDY_CONFIG: TidyConfig = {
   hSpacing: 420,
   vSpacing: 60,
-  rootGapY: 100,
+  rootGapY: 200,
   defaultW: 280,
   defaultH: 110,
 };
@@ -287,11 +287,14 @@ function buildChildrenMap(
       queue.push(e.target);
     }
     // Stable order: sort by the child's CURRENT Y so the tidied result
-    // preserves the user's intent (top-most stays top-most).
+    // preserves the user's intent (top-most stays top-most). Missing geo
+    // (e.g. a note just inserted by Tab whose measurement hasn't propagated
+    // to ReactFlow's store before our RAF tidy fires) sorts LAST — newly
+    // added cards land at the bottom of their sibling row, not the top.
     kids.sort((a, b) => {
       const na = getNode(a, nodes);
       const nb = getNode(b, nodes);
-      return (na?.y ?? 0) - (nb?.y ?? 0);
+      return (na?.y ?? Number.POSITIVE_INFINITY) - (nb?.y ?? Number.POSITIVE_INFINITY);
     });
     out.set(cur, kids);
   }
