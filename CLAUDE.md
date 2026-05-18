@@ -12,7 +12,31 @@ Single-user web app that pulls open issues from one Linear workspace onto a free
 - `npm run build` — `tsc -b` (project references) then `vite build`. Both `tsconfig.app.json` and `tsconfig.node.json` must typecheck.
 - `npm run preview` — serve the production build. Note: no API middleware here, so mutations and refresh won't work in preview.
 - `npm run fetch` — standalone `tsx scripts/fetchSnapshot.ts`; same Linear pull as `/api/refetch`, writes to `public/data/issues.json`. Run this once before `dev` if the snapshot doesn't exist yet (the browser fetches `/data/issues.json` on load and will error otherwise).
+- `npm run tauri:dev` — Tauri 窗口 + vite (`vite.tauri.config.ts`) + Rust 后端。**不挂** `linearApiPlugin`，靠 `src/lib/tauriBridge.ts` 把 `/api/*` 路由到 Tauri commands。agent 功能在此 runtime 下线（占位）。
+- `npm run tauri:build` — 产 `.app` 到 `src-tauri/target/release/bundle/macos/Linear Board.app`。
+- `npm run release` — prod release：跑 `tauri:build` 然后把 .app 装到 `~/Applications/Linear Board.app`（旧的 mv 成 `*.bak-YYYYMMDD-HHMMSS` 备份）。日常 ship 走这条，不要直接 `tauri:build` 后手动 cp。
+- `npm run release:dev <suffix> [-- --reset-data]` — worktree dev release：partial-override conf 把 productName / identifier 改成 `Linear Board <suffix>` / `com.han.linearboard.dev.<slug>`，产物留在 `src-tauri/target/release/bundle/macos/` 不进 `~/Applications/`，data dir 独立 (`~/Library/Application Support/com.han.linearboard.dev.<slug>/data/`) 且默认保留改动；细节见 [`docs/development_modes.md`](docs/development_modes.md) 的 "Release flow" 段。
 - No test runner, linter, or formatter is configured. Don't invent commands.
+
+## Runtime Targets (临时 dual-stack)
+
+> 2026-05-16 起项目同时跑两个 runtime — 浏览器 (`npm run dev`) 和 macOS Tauri 壳 (`tauri:dev` / `.app`)。详见 [`docs/development_modes.md`](docs/development_modes.md)。
+
+**当前姿势**：浏览器是主开发环境（hot reload + Chrome devtools），Tauri 是 packaging + 日常使用目标。`npm run dev` 必须始终保留完整功能 —— 任何 Tauri 化改动都不能破坏浏览器开发流。
+
+**三处同步约定**（dual-stack 的税）：每加一个 `/api/*` endpoint，下面三处都要写：
+1. `src/server/linearApiPlugin.ts` — Node 端 route handler，给浏览器
+2. `src-tauri/src/lib.rs` — `#[tauri::command]` + 注册到 `invoke_handler`，给 Tauri
+3. `src/lib/tauriBridge.ts` 的 `dispatch()` — path 匹配 + `invoke()` 调 Rust command，给前端透明路由
+
+**最易漏**：Rust 端。每写完一个新 endpoint 自检三处都有。
+
+**数据路径差异**：浏览器读写 `public/data/`，Tauri 读写 `~/Library/Application Support/com.han.linearboard/data/`。两份数据不自动同步。
+
+**何时退役 dual-stack**：Linear API + agent (`node-pty`) 都迁完 Rust 后，`linearApiPlugin.ts` 整个删掉。当前迁移进度：
+- ✅ `boardStore` 已 Rust
+- 🚧 Linear API (arc `260516c_migrate_linear_to_rust` 进行中) — 直接动因是 `@linear/sdk` 在 webview 跑不起来（Node 模块被 externalise）
+- 📋 Agent (`node-pty` / `agentPoller`) — spike `260516b_spike_rust_pty` 已 de-risk，待起 arc
 
 ## Architecture
 

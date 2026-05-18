@@ -2,6 +2,15 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.25.0 — App 内自动更新（Tauri + GitHub Releases）
+  - Hamburger menu 新增 "Check Update" 项（仅 Tauri runtime 出现，浏览器隐藏）
+  - 接 `tauri-plugin-updater` v2 + `@tauri-apps/plugin-updater` / `plugin-process`，私钥 `~/.tauri/board_updater.key`，公钥嵌入 `tauri.conf.json`
+  - 三态 UI：toast "已是最新"（3 秒自消失）／modal "发现 vX.Y.Z" 提示安装／modal 下载进度 → `relaunch()`
+  - `scripts/release.sh prod` 扩成签名 + 生成 `latest.json` + `gh release create` 一条龙
+  - 顺手对齐版本号：`Cargo.toml` 从 0.23.0 提到与 `package.json` 一致
+  - **首次升级断层**：≤ v0.24.1 装机必须手动重装 v0.25.0 才能享 updater；之后 self-serve
+  - 私钥本体 + 密码已存密码管理器；丢失 = 永远无法发新版
+
 - v0.24.1 — 撤掉 Edge 样式选择器（v0.22.0 引入的）
   - 删除 `EdgeStylePicker.tsx` 和 `lib/edgeStyles.ts`，TopBar 不再有箭头风格下拉
   - 沟通失误导致这个功能被留了下来 —— 原本只是 review，不该 ship

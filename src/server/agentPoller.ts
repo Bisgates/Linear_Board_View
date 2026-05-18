@@ -327,9 +327,20 @@ export async function ensureAgentRunning(
   // skipDangerousModePermissionPrompt=true setting to start the TUI with no
   // permission dialogs at all. Without it claude shows a y/n confirmation
   // dialog at startup that intercepts our paste and crashes the session.
+  //
+  // --setting-sources project,local explicitly excludes the user's global
+  // ~/.claude/settings.json. The user's file currently has several non-
+  // standard hook keys (PermissionRequest / PostCompact / StopFailure / …)
+  // that Claude flags at startup with a "Settings Error" dialog — same
+  // crash-on-paste failure mode. OAuth auth tokens are stored separately
+  // (keychain / ~/.claude/.credentials), so this only drops plugin /
+  // statusLine / language prefs the agent doesn't need anyway.
   const pty = nodePty.spawn(
     claudeBin,
-    ["--dangerously-skip-permissions"],
+    [
+      "--dangerously-skip-permissions",
+      "--setting-sources", "project,local",
+    ],
     {
       name: "xterm-256color",
       cols: 200,

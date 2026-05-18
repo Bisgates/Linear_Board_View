@@ -1,0 +1,50 @@
+[package]
+name = "linear-board"
+version = "0.25.0"
+description = "Linear Board — spatial UI for Linear issues"
+authors = ["han"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "linear_board_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util", "rt", "rt-multi-thread", "macros", "sync"] }
+anyhow = "1"
+thiserror = "1"
+# `reqwest` is already pulled in by `tauri` (transitively via the updater/http
+# stack), but without TLS or json feature flags. We re-declare it here to add
+# `rustls-tls` + `json` so we can speak HTTPS to api.linear.app from the
+# backend. `rustls` avoids a `native-tls` linker dependency on macOS.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "charset", "http2"] }
+# In-app auto-updater. Public key verification only on the install side; private
+# key lives only on the dev mac (`~/.tauri/board_updater.key`). Manifest +
+# bundle hosted on GitHub Releases — see `plugins.updater` in tauri.conf.json.
+tauri-plugin-updater = "2"
+# `tauri-plugin-process` exposes the matching JS `relaunch()` we call after
+# install — without registering this plugin the frontend invoke would error.
+tauri-plugin-process = "2"
+
+[dev-dependencies]
+# `examples/updater_smoke.rs` validates the signing chain (private key in
+# ~/.tauri → tauri build → .sig → public key in tauri.conf.json) without
+# booting the webview. Both crates are already in our dep graph (`minisign-
+# verify` via tauri-plugin-updater, `base64` via tauri) but Cargo wants them
+# declared here too for the example target to compile.
+base64 = "0.22"
+minisign-verify = "0.2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

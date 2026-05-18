@@ -7,7 +7,10 @@ import { DetailPanel } from "./components/DetailPanel";
 import { IssuePickerPopover } from "./components/IssuePickerPopover";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ToastStack, type ToastItem } from "./components/Toast";
+import { UpdaterModal } from "./components/UpdaterModal";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
+import { isTauri } from "./lib/tauriBridge";
+import { checkForUpdate, runInstall, type UpdateInfo, type DownloadProgress } from "./lib/updater";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
@@ -83,6 +86,70 @@ export default function App() {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // Updater state machine (Tauri runtime only). One of:
+  //   idle      — menu item enabled, no overlay
+  //   checking  — menu item disabled, no overlay
+  //   available — modal shows new version, two buttons
+  //   installing — modal shows progress bar, no buttons
+  // Errors surface via `pushToast` and reset state to `idle`.
+  type UpdaterState =
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "available"; info: UpdateInfo; handle: unknown }
+    | { kind: "installing"; info: UpdateInfo; progress: DownloadProgress | null };
+  const [updaterState, setUpdaterState] = useState<UpdaterState>({ kind: "idle" });
+  const showCheckUpdate = isTauri();
+
+  const handleCheckUpdate = useCallback(async () => {
+    if (updaterState.kind !== "idle") return;
+    setUpdaterState({ kind: "checking" });
+    try {
+      const result = await checkForUpdate();
+      if (!result.available || !result.info || !result.handle) {
+        // Fall back to "already latest" toast. `currentVersion` comes from
+        // `tauri.conf.json#version`, set per release in `scripts/release.sh`.
+        pushToast("success", "已是最新版本");
+        setUpdaterState({ kind: "idle" });
+        return;
+      }
+      setUpdaterState({ kind: "available", info: result.info, handle: result.handle });
+    } catch (e) {
+      pushToast("error", `检查更新失败: ${String(e)}`);
+      setUpdaterState({ kind: "idle" });
+    }
+  }, [updaterState.kind, pushToast]);
+
+  const handleInstall = useCallback(async () => {
+    if (updaterState.kind !== "available") return;
+    const { info, handle } = updaterState;
+    setUpdaterState({ kind: "installing", info, progress: null });
+    try {
+      await runInstall(handle, (progress) => {
+        setUpdaterState((prev) =>
+          prev.kind === "installing" ? { ...prev, progress } : prev,
+        );
+      });
+      // `relaunch()` inside `runInstall` should kill the current process. If
+      // we somehow get here, the install completed but the relaunch was a
+      // no-op — surface a toast asking the user to restart manually.
+      pushToast("success", "安装完成，请手动重启");
+      setUpdaterState({ kind: "idle" });
+    } catch (e) {
+      pushToast("error", `安装失败: ${String(e)}`);
+      setUpdaterState({ kind: "idle" });
+    }
+  }, [updaterState, pushToast]);
+
+  const handleDismissUpdaterModal = useCallback(() => {
+    if (updaterState.kind === "available") {
+      setUpdaterState({ kind: "idle" });
+    }
+  }, [updaterState.kind]);
+
+  // Menu item is busy while we're checking, showing the modal, or installing.
+  // Only "idle" lets the user re-trigger.
+  const checkUpdateBusy = updaterState.kind !== "idle";
 
   const wov = useWorkingOnViews((e) => pushToast("error", `Views save failed: ${String(e)}`));
   const workingOn = useBoardState(wov.boardEndpoint, (e) =>
@@ -489,6 +556,9 @@ export default function App() {
         customLabel={customViewName}
         onCustomExpand={(a) => setDropdownAnchor({ kind: "custom", ...a })}
         onRenameActiveCustom={handleRenameActiveCustom}
+        showCheckUpdate={showCheckUpdate}
+        checkUpdateBusy={checkUpdateBusy}
+        onCheckUpdate={handleCheckUpdate}
         leftSlot={
           activeView === "working_on" ? (
             <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
@@ -534,6 +604,31 @@ export default function App() {
           )}
           {activeView === "agent_tmp" ? (
             <AgentCardProvider value={agentCardCtxValue}>
+              {isTauri() && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 12,
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    zIndex: 5,
+                    padding: "8px 16px",
+                    background: "var(--paper-soft)",
+                    border: "1px solid var(--hairline)",
+                    borderRadius: 4,
+                    color: "var(--ink-soft)",
+                    fontSize: 12,
+                    fontFamily: "var(--sans)",
+                    letterSpacing: "0.02em",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                    pointerEvents: "none",
+                    maxWidth: "min(80%, 720px)",
+                    textAlign: "center",
+                  }}
+                >
+                  Agent management disabled in Tauri build (pending native pty migration). Cards stay read-only here — use the Vite dev workflow to drive Claude agents.
+                </div>
+              )}
               <CanvasBoard
                 viewKey="agent_tmp"
                 displayedIssues={opusIssues}
@@ -617,6 +712,13 @@ export default function App() {
         )}
       </div>
       <ToastStack items={toasts} onDismiss={dismissToast} />
+      {(updaterState.kind === "available" || updaterState.kind === "installing") && (
+        <UpdaterModal
+          state={updaterState}
+          onInstall={handleInstall}
+          onDismiss={handleDismissUpdaterModal}
+        />
+      )}
     </div>
   );
 }

@@ -23,6 +23,10 @@ interface TopBarProps {
   /** Double-click on the Custom tab commits a new name for the active custom view. */
   onRenameActiveCustom?: (name: string) => void;
   leftSlot?: React.ReactNode;
+  // Updater entry surfaced inside the hamburger menu (Tauri runtime only).
+  showCheckUpdate?: boolean;
+  checkUpdateBusy?: boolean;
+  onCheckUpdate?: () => void;
 }
 
 export function TopBar({
@@ -40,6 +44,9 @@ export function TopBar({
   onCustomExpand,
   onRenameActiveCustom,
   leftSlot,
+  showCheckUpdate,
+  checkUpdateBusy,
+  onCheckUpdate,
 }: TopBarProps) {
   return (
     <header
@@ -96,6 +103,9 @@ export function TopBar({
           syncing={syncing}
           onRefresh={onRefresh}
           onOpenShortcuts={onOpenShortcuts}
+          showCheckUpdate={showCheckUpdate}
+          checkUpdateBusy={checkUpdateBusy}
+          onCheckUpdate={onCheckUpdate}
         />
       </div>
     </header>

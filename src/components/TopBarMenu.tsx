@@ -5,6 +5,12 @@ interface Props {
   syncing: boolean;
   onRefresh: () => void;
   onOpenShortcuts: () => void;
+  // Updater entry — only shown when `showCheckUpdate` is true (Tauri runtime).
+  // `checkUpdateBusy` greys the item out while a check/install is in flight so
+  // the user can't double-fire.
+  showCheckUpdate?: boolean;
+  checkUpdateBusy?: boolean;
+  onCheckUpdate?: () => void;
 }
 
 function formatRelative(isoOrNull: string | null, nowMs: number): string {
@@ -20,7 +26,15 @@ function formatRelative(isoOrNull: string | null, nowMs: number): string {
   return `${Math.floor(hr / 24)}d ago`;
 }
 
-export function TopBarMenu({ lastSyncAt, syncing, onRefresh, onOpenShortcuts }: Props) {
+export function TopBarMenu({
+  lastSyncAt,
+  syncing,
+  onRefresh,
+  onOpenShortcuts,
+  showCheckUpdate,
+  checkUpdateBusy,
+  onCheckUpdate,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -101,6 +115,20 @@ export function TopBarMenu({ lastSyncAt, syncing, onRefresh, onOpenShortcuts }: 
               onRefresh();
             }}
           />
+          {showCheckUpdate && onCheckUpdate && (
+            <>
+              <Separator />
+              <MenuItem
+                label={checkUpdateBusy ? "Checking…" : "Check Update"}
+                disabled={checkUpdateBusy}
+                onClick={() => {
+                  if (checkUpdateBusy) return;
+                  setOpen(false);
+                  onCheckUpdate();
+                }}
+              />
+            </>
+          )}
           <Separator />
           <MenuItem
             label="Keyboard shortcuts"

@@ -1,16 +1,26 @@
 {
   "name": "linear_board_view",
-  "version": "0.24.1",
+  "version": "0.25.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "fetch": "tsx scripts/fetchSnapshot.ts"
+    "fetch": "tsx scripts/fetchSnapshot.ts",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:frontend-dev": "vite --config vite.tauri.config.ts",
+    "tauri:frontend-build": "tsc -b && vite build --config vite.tauri.config.ts",
+    "release": "scripts/release.sh prod",
+    "release:dev": "scripts/release.sh dev"
   },
   "dependencies": {
     "@linear/sdk": "^39.0.0",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@xyflow/react": "^12.3.5",
     "d3-hierarchy": "^3.1.2",
     "dotenv": "^16.4.5",
@@ -19,6 +29,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.1",
     "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.12",
