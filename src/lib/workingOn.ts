@@ -1,3 +1,5 @@
+import { openPath } from "./tauriInvoke";
+
 export interface NoteImage {
   id: string;
   // Data URL (base64) — stored inline in the board JSON.
@@ -89,27 +91,6 @@ export const EMPTY_BOARD: BoardData = {
   groups: [],
 };
 
-export async function loadBoardData(endpoint: string): Promise<BoardData> {
-  const res = await fetch(endpoint, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`load ${endpoint} failed: ${res.status}`);
-  return (await res.json()) as BoardData;
-}
-
-export async function saveBoardData(endpoint: string, data: BoardData): Promise<BoardData> {
-  const res = await fetch(endpoint, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error(`save ${endpoint} failed: ${res.status}`);
-  const json = (await res.json()) as { ok: boolean; data?: BoardData; error?: string };
-  if (!json.ok || !json.data) throw new Error(json.error ?? `save ${endpoint}: bad response`);
-  return json.data;
-}
-
-export const WORKING_ON_ENDPOINT = "/api/working-on";
-export const ALL_ISSUES_BOARD_ENDPOINT = "/api/all-issues-board";
-
 // Tiny random id; not crypto, just unique enough within one user's session.
 export function shortId(prefix: string): string {
   const r = Math.random().toString(36).slice(2, 8);
@@ -117,14 +98,10 @@ export function shortId(prefix: string): string {
   return `${prefix}_${t}${r}`;
 }
 
-/** Open a local file path or URL via the dev server's POST /api/open. */
+/** Open a local file path or URL via the Tauri `open_path` command. */
 export async function openLocalPath(p: string): Promise<void> {
   try {
-    await fetch("/api/open", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: p }),
-    });
+    await openPath(p);
   } catch (err) {
     console.error("[open] failed", err);
   }

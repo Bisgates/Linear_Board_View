@@ -1,5 +1,6 @@
 import type { IssueRecord } from "../linear/types";
 import type { WorkflowState } from "../linear/fetchWorkflowStates";
+import { readIssuesSnapshot } from "./tauriInvoke";
 
 export interface SnapshotFile {
   fetchedAt: string;
@@ -13,7 +14,5 @@ export interface SnapshotFile {
 }
 
 export async function loadIssues(): Promise<SnapshotFile> {
-  const res = await fetch("/data/issues.json", { cache: "no-cache" });
-  if (!res.ok) throw new Error(`failed to load issues.json: ${res.status}`);
-  return (await res.json()) as SnapshotFile;
+  return readIssuesSnapshot();
 }

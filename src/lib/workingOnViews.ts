@@ -1,3 +1,18 @@
+import type { BoardData } from "./workingOn";
+import {
+  type BoardSource,
+  deleteCustomViewBoard,
+  deleteDayViewBoard,
+  readCustomManifest,
+  readCustomViewBoard,
+  readDayManifest,
+  readDayViewBoard,
+  writeCustomManifest,
+  writeCustomViewBoard,
+  writeDayManifest,
+  writeDayViewBoard,
+} from "./tauriInvoke";
+
 export interface ViewMeta {
   id: string;
   name: string;
@@ -10,84 +25,42 @@ export interface ViewsManifest {
 }
 
 export interface ViewsClient {
-  manifestEndpoint: string;
-  boardEndpointFor: (id: string) => string;
+  kind: "day" | "custom";
   loadManifest: () => Promise<ViewsManifest>;
   saveManifest: (m: ViewsManifest) => Promise<ViewsManifest>;
-  deleteViewBoard: (id: string) => Promise<void>;
+  loadBoard: (id: string) => Promise<BoardData>;
+  saveBoard: (id: string, data: BoardData) => Promise<BoardData>;
+  deleteBoard: (id: string) => Promise<void>;
+  boardSource: (id: string) => BoardSource;
 }
 
-export function createViewsClient(opts: {
-  manifestEndpoint: string;
-  boardEndpointFor: (id: string) => string;
-}): ViewsClient {
-  const { manifestEndpoint, boardEndpointFor } = opts;
-  return {
-    manifestEndpoint,
-    boardEndpointFor,
-    async loadManifest(): Promise<ViewsManifest> {
-      const res = await fetch(manifestEndpoint, { cache: "no-cache" });
-      if (!res.ok) throw new Error(`load manifest failed: ${res.status}`);
-      return (await res.json()) as ViewsManifest;
-    },
-    async saveManifest(m: ViewsManifest): Promise<ViewsManifest> {
-      const res = await fetch(manifestEndpoint, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(m),
-      });
-      if (!res.ok) {
-        let detail = "";
-        try {
-          const text = await res.text();
-          const parsed = JSON.parse(text) as { error?: unknown };
-          detail = typeof parsed.error === "string" ? `: ${parsed.error}` : `: ${text}`;
-        } catch {
-          /* non-json body, ignore */
-        }
-        throw new Error(`save manifest failed: ${res.status}${detail}`);
-      }
-      const json = (await res.json()) as { ok: boolean; data?: ViewsManifest; error?: string };
-      if (!json.ok || !json.data) throw new Error(json.error ?? "save manifest: bad response");
-      return json.data;
-    },
-    async deleteViewBoard(id: string): Promise<void> {
-      const res = await fetch(boardEndpointFor(id), { method: "DELETE" });
-      if (!res.ok) throw new Error(`delete view ${id} failed: ${res.status}`);
-    },
-  };
-}
+// --- Day (Working On) client ---
 
-// --- Day (Working On) client — keeps the legacy module-level exports so
-// existing callers stay untouched. ---
-
-export const VIEWS_ENDPOINT = "/api/working-on/views";
-
-export function viewBoardEndpoint(id: string): string {
-  return `/api/working-on/views/${encodeURIComponent(id)}`;
-}
-
-export const dayViewsClient: ViewsClient = createViewsClient({
-  manifestEndpoint: VIEWS_ENDPOINT,
-  boardEndpointFor: viewBoardEndpoint,
-});
+export const dayViewsClient: ViewsClient = {
+  kind: "day",
+  loadManifest: readDayManifest,
+  saveManifest: writeDayManifest,
+  loadBoard: readDayViewBoard,
+  saveBoard: writeDayViewBoard,
+  deleteBoard: deleteDayViewBoard,
+  boardSource: (viewId) => ({ kind: "day-view", viewId }),
+};
 
 export const loadManifest = () => dayViewsClient.loadManifest();
 export const saveManifest = (m: ViewsManifest) => dayViewsClient.saveManifest(m);
-export const deleteViewBoard = (id: string) => dayViewsClient.deleteViewBoard(id);
+export const deleteViewBoard = (id: string) => dayViewsClient.deleteBoard(id);
 
 // --- Custom client ---
 
-export const CUSTOM_VIEWS_ENDPOINT = "/api/custom/views";
-
-export function customViewBoardEndpoint(id: string): string {
-  return `/api/custom/views/${encodeURIComponent(id)}`;
-}
-
-export const customViewsClient: ViewsClient = createViewsClient({
-  manifestEndpoint: CUSTOM_VIEWS_ENDPOINT,
-  boardEndpointFor: customViewBoardEndpoint,
-});
+export const customViewsClient: ViewsClient = {
+  kind: "custom",
+  loadManifest: readCustomManifest,
+  saveManifest: writeCustomManifest,
+  loadBoard: readCustomViewBoard,
+  saveBoard: writeCustomViewBoard,
+  deleteBoard: deleteCustomViewBoard,
+  boardSource: (viewId) => ({ kind: "custom-view", viewId }),
+};
 
 // --- Naming ---
 

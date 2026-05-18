@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EMPTY_BOARD, type BoardData } from "./workingOn";
 import {
-  ALL_ISSUES_BOARD_ENDPOINT,
-  EMPTY_BOARD,
-  WORKING_ON_ENDPOINT,
-  loadBoardData,
-  saveBoardData,
-  type BoardData,
-} from "./workingOn";
+  type BoardSource,
+  boardSourceKey,
+  loadBoardFor,
+  saveBoardFor,
+} from "./tauriInvoke";
 
 export interface UseBoardState {
   data: BoardData;
@@ -20,12 +19,15 @@ const DEBOUNCE_MS = 200;
 const MAX_UNDO = 50;
 
 /**
- * Hook that loads a board's data from the given endpoint, keeps it in local
- * state, debounces writes back to the endpoint, and maintains an undo stack.
- * Used by every spatial-board view in the app (Working On, All Issues, etc.) —
- * each view supplies its own endpoint.
+ * Hook that loads a board's data from the given source, keeps it in local
+ * state, debounces writes back, and maintains an undo stack. Every
+ * spatial-board view in the app (day views, custom views, all-issues) calls
+ * this with its own `BoardSource` discriminator.
  */
-export function useBoardState(endpoint: string | null, onError?: (e: unknown) => void): UseBoardState {
+export function useBoardState(
+  source: BoardSource | null,
+  onError?: (e: unknown) => void,
+): UseBoardState {
   const [data, setDataState] = useState<BoardData>(EMPTY_BOARD);
   const [loaded, setLoaded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,11 +38,16 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
   const redoStack = useRef<BoardData[]>([]);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+
+  const sourceKey = boardSourceKey(source);
 
   useEffect(() => {
-    // Endpoint not ready yet (e.g. manifest still loading). Reset to empty so a
-    // stale view's data doesn't leak across endpoint changes.
-    if (!endpoint) {
+    const current = sourceRef.current;
+    // Source not ready yet (e.g. manifest still loading). Reset to empty so a
+    // stale view's data doesn't leak across source changes.
+    if (!current) {
       latestRef.current = EMPTY_BOARD;
       undoStack.current = [];
       redoStack.current = [];
@@ -52,7 +59,7 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
     setLoaded(false);
     (async () => {
       try {
-        const d = await loadBoardData(endpoint);
+        const d = await loadBoardFor(current);
         if (cancelled) return;
         latestRef.current = d;
         undoStack.current = [];
@@ -61,7 +68,7 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
         setLoaded(true);
       } catch (e) {
         if (cancelled) return;
-        console.error(`[board ${endpoint}] load failed`, e);
+        console.error(`[board ${sourceKey}] load failed`, e);
         onErrorRef.current?.(e);
         setLoaded(true);
       }
@@ -69,19 +76,20 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
     return () => {
       cancelled = true;
     };
-  }, [endpoint]);
+  }, [sourceKey]);
 
   const schedule = useCallback(() => {
-    if (!endpoint) return;
+    const current = sourceRef.current;
+    if (!current) return;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       const snapshot = latestRef.current;
-      saveBoardData(endpoint, snapshot).catch((e) => {
-        console.error(`[board ${endpoint}] save failed`, e);
+      saveBoardFor(current, snapshot).catch((e) => {
+        console.error(`[board ${boardSourceKey(current)}] save failed`, e);
         onErrorRef.current?.(e);
       });
     }, DEBOUNCE_MS);
-  }, [endpoint]);
+  }, [sourceKey]);
 
   const setData = useCallback<UseBoardState["setData"]>(
     (updater) => {
@@ -127,8 +135,9 @@ export function useBoardState(endpoint: string | null, onError?: (e: unknown) =>
   return { data, loaded, setData, undo, redo };
 }
 
-export const useWorkingOnState = (onError?: (e: unknown) => void) =>
-  useBoardState(WORKING_ON_ENDPOINT, onError);
+const ALL_ISSUES_SOURCE: BoardSource = { kind: "all-issues" };
 
-export const useAllIssuesBoardState = (onError?: (e: unknown) => void) =>
-  useBoardState(ALL_ISSUES_BOARD_ENDPOINT, onError);
+export const useAllIssuesBoardState = (onError?: (e: unknown) => void) => {
+  const source = useMemo(() => ALL_ISSUES_SOURCE, []);
+  return useBoardState(source, onError);
+};

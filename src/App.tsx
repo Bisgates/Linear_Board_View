@@ -9,7 +9,12 @@ import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ToastStack, type ToastItem } from "./components/Toast";
 import { UpdaterModal } from "./components/UpdaterModal";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
-import { isTauri } from "./lib/tauriBridge";
+import {
+  createIssueComment,
+  isTauri,
+  refetchAndPersist,
+  updateIssue,
+} from "./lib/tauriInvoke";
 import { checkForUpdate, runInstall, type UpdateInfo, type DownloadProgress } from "./lib/updater";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
@@ -152,11 +157,11 @@ export default function App() {
   const checkUpdateBusy = updaterState.kind !== "idle";
 
   const wov = useWorkingOnViews((e) => pushToast("error", `Views save failed: ${String(e)}`));
-  const workingOn = useBoardState(wov.boardEndpoint, (e) =>
+  const workingOn = useBoardState(wov.boardSource, (e) =>
     pushToast("error", `Working-on save failed: ${String(e)}`),
   );
   const cv = useCustomViews((e) => pushToast("error", `Custom views save failed: ${String(e)}`));
-  const customBoard = useBoardState(cv.boardEndpoint, (e) =>
+  const customBoard = useBoardState(cv.boardSource, (e) =>
     pushToast("error", `Custom save failed: ${String(e)}`),
   );
   const allIssuesBoard = useAllIssuesBoardState((e) =>
@@ -229,14 +234,12 @@ export default function App() {
     setSyncing(true);
     setError(null);
     try {
-      const res = await fetch("/api/refetch");
-      const json = (await res.json()) as { ok: boolean; count?: number; elapsedMs?: number; error?: string };
-      if (!json.ok) throw new Error(json.error ?? "refresh failed");
-      console.log(`[refresh] ${json.count} issues in ${json.elapsedMs}ms`);
+      const result = await refetchAndPersist();
+      console.log(`[refresh] ${result.count} issues in ${result.elapsedMs}ms`);
       const snap = await loadIssues();
       setSnapshot(snap);
       setLastSyncAt(snap.fetchedAt);
-      pushToast("success", `Refreshed · ${json.count} issues`);
+      pushToast("success", `Refreshed · ${result.count} issues`);
     } catch (e) {
       setError(String(e));
       pushToast("error", `Refresh failed: ${String(e)}`);
@@ -305,18 +308,12 @@ export default function App() {
       });
 
       try {
-        const res = await fetch(`/api/issue/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patch),
-        });
-        const json = (await res.json()) as { ok: boolean; issue?: IssueRecord; error?: string };
-        if (!json.ok || !json.issue) throw new Error(json.error ?? "mutation failed");
+        const issue = await updateIssue(id, patch);
         setSnapshot((prev) => {
           if (!prev) return prev;
           return {
             ...prev,
-            issues: prev.issues.map((i) => (i.id === id ? json.issue! : i)),
+            issues: prev.issues.map((i) => (i.id === id ? issue : i)),
           };
         });
         const field = Object.keys(patch)[0] ?? "issue";
@@ -407,16 +404,7 @@ export default function App() {
       stop: agentSessions.stopSession,
       postComment: async (issueId: string, body: string): Promise<boolean> => {
         try {
-          const res = await fetch(`/api/issue/${issueId}/comment`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ body }),
-          });
-          const json = (await res.json()) as { ok: boolean; error?: string };
-          if (!json.ok) {
-            pushToast("error", `Comment failed: ${json.error ?? "unknown"}`);
-            return false;
-          }
+          await createIssueComment(issueId, body);
           return true;
         } catch (e) {
           pushToast("error", `Comment failed: ${String(e)}`);

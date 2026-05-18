@@ -9,13 +9,14 @@ import {
   type ViewsClient,
   type ViewsManifest,
 } from "./workingOnViews";
-import { saveBoardData, shortId } from "./workingOn";
+import { shortId } from "./workingOn";
+import type { BoardSource } from "./tauriInvoke";
 
 export interface UseViewsList {
   manifest: ViewsManifest | null;
   loaded: boolean;
   activeId: string | null;
-  boardEndpoint: string | null;
+  boardSource: BoardSource | null;
   setActiveId: (id: string) => void;
   createView: (name?: string) => Promise<string | null>;
   renameView: (id: string, name: string) => Promise<void>;
@@ -61,7 +62,7 @@ export function useViewsList(
         setManifest(boot);
         setLoaded(true);
       } catch (e) {
-        console.error(`[useViewsList ${client.manifestEndpoint}] load failed`, e);
+        console.error(`[useViewsList ${client.kind}] load failed`, e);
         onErrorRef.current?.(e);
         if (!cancelled) setLoaded(true);
       }
@@ -78,7 +79,7 @@ export function useViewsList(
         setManifest(saved);
         return saved;
       } catch (e) {
-        console.error(`[useViewsList ${client.manifestEndpoint}] save failed`, e);
+        console.error(`[useViewsList ${client.kind}] save failed`, e);
         onErrorRef.current?.(e);
         return null;
       }
@@ -93,7 +94,7 @@ export function useViewsList(
       const next: ViewsManifest = { ...current, activeId: id };
       setManifest(next);
       client.saveManifest(next).catch((e) => {
-        console.error(`[useViewsList ${client.manifestEndpoint}] setActive save failed`, e);
+        console.error(`[useViewsList ${client.kind}] setActive save failed`, e);
         onErrorRef.current?.(e);
       });
     },
@@ -110,14 +111,14 @@ export function useViewsList(
       const finalName = uniqueName(desired, existingNames);
       const meta: ViewMeta = { id, name: finalName, createdAt: new Date().toISOString() };
       try {
-        await saveBoardData(client.boardEndpointFor(id), {
+        await client.saveBoard(id, {
           issueMembers: {},
           noteNodes: [],
           edges: [],
           groups: [],
         });
       } catch (e) {
-        console.error(`[useViewsList ${client.manifestEndpoint}] create board failed`, e);
+        console.error(`[useViewsList ${client.kind}] create board failed`, e);
         onErrorRef.current?.(e);
         return null;
       }
@@ -159,9 +160,9 @@ export function useViewsList(
       const saved = await persist(next);
       if (saved) {
         try {
-          await client.deleteViewBoard(id);
+          await client.deleteBoard(id);
         } catch (e) {
-          console.warn(`[useViewsList ${client.manifestEndpoint}] board file delete failed (manifest already updated)`, e);
+          console.warn(`[useViewsList ${client.kind}] board file delete failed (manifest already updated)`, e);
         }
       }
     },
@@ -169,13 +170,13 @@ export function useViewsList(
   );
 
   const activeId = manifest?.activeId ?? null;
-  const boardEndpoint = activeId ? client.boardEndpointFor(activeId) : null;
+  const boardSource = activeId ? client.boardSource(activeId) : null;
 
   return {
     manifest,
     loaded,
     activeId,
-    boardEndpoint,
+    boardSource,
     setActiveId,
     createView,
     renameView,
