@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.26.1 — 修 dev mac 数据被 baked 进 .app bundle（长期 leak）
+  - `public/data/` 在 dev 机器上有真实 issues / working_on / custom / agent_sessions 数据；vite build 把它拷到 `dist/data/`，Tauri 通过 `frontendDist: "../dist"` 把 dist 整个 embed 进 Rust binary —— 于是每次发版的 .app 装到别的 mac 上都自带 dev 机器的数据
+  - 长期 bug，0.25.x 各版本都中招；0.26.0 也漏修
+  - 修：`rm -rf public/`（dual-stack 时代浏览器 fetch `/data/issues.json` 才需要的，单一 Tauri runtime 完全不用）
+  - 验证：rebuild 后 `dist/` 只剩 `assets/ + index.html`，6.3MB binary 里只残留 Rust struct field name（`issueMembers` / `noteNodes`），无真实数据；裸装 .app 到新机会读 Rust 端 fallback empty placeholder
+
 - v0.26.0 — 删 web，独留 Tauri runtime
   - 放弃 dual-stack：browser dev server + `linearApiPlugin` 整条路径全部退役，仓库只剩一个 Tauri runtime
   - 删 `src/server/` (linearApiPlugin / agentPoller / agentSessions / boardStore / node-pty.d.ts) + `scripts/{fetchSnapshot,agent_post}.ts` + `src/linear/{createComment,fetchIssues}.ts` —— ~1700 LOC 净减
