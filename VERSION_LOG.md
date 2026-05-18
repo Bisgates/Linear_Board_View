@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z — <一句话标题>`，时间倒序。非平凡条目下挂缩进子弹列出细节。规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.26.2 — `scripts/release.sh` 自动 source `.env`
+  - 之前 `npm run release` 启动时 env 没有 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，导致签名步骤直接 die；用户得手动 `set -a && source .env && set +a` 或写进 shell rc
+  - 修：release.sh 在 cd 到 repo root 后立刻 `set -a; . "$REPO_ROOT/.env"; set +a`（如果文件存在）。一行 if-fi 块，无外部依赖（不需要 dotenv-cli）
+  - 顺手把 `dist/` 之外的工作流瑕疵补齐——以后新机器只要 `~/.tauri/board_updater.key` 和 `.env` 都到位，`npm run release` 一条命令直通 GitHub
+
 - v0.26.1 — 修 dev mac 数据被 baked 进 .app bundle（长期 leak）
   - `public/data/` 在 dev 机器上有真实 issues / working_on / custom / agent_sessions 数据；vite build 把它拷到 `dist/data/`，Tauri 通过 `frontendDist: "../dist"` 把 dist 整个 embed 进 Rust binary —— 于是每次发版的 .app 装到别的 mac 上都自带 dev 机器的数据
   - 长期 bug，0.25.x 各版本都中招；0.26.0 也漏修

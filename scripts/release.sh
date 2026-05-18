@@ -40,6 +40,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# ---- auto-load .env --------------------------------------------------------
+# `npm run release` does not inherit env vars from .env (no dotenv wrapper in
+# the npm script). Source the file here so TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# and any other build-time secrets are available without the caller having to
+# remember to `source .env` first. `set -a` exports everything that gets set
+# while sourcing; `set +a` restores the default. Missing .env is a no-op.
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$REPO_ROOT/.env"
+  set +a
+fi
+
 BUNDLE_DIR="$REPO_ROOT/src-tauri/target/release/bundle/macos"
 PROD_DATA_SRC="$HOME/Library/Application Support/com.han.linearboard/data"
 USER_APPS_DIR="$HOME/Applications"
