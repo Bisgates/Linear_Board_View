@@ -1,6 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
+/**
+ * Minimal stroke-only chevron used by every "click to expand a dropdown"
+ * affordance in the top bar (ADD ISSUE ▾, WORKING ON ▾, CUSTOM ▾).
+ * Inherits `currentColor`, so it blends with whatever tab style sets `color`.
+ * 1.4px round-cap/-join strokes read as a proper chevron at 10–12px size
+ * — the unicode "▾" we used before was a filled triangle, too heavy next to
+ * the uppercase 11px labels.
+ */
+export function Chevron({ size = 10 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 10 10"
+      aria-hidden
+      style={{ display: "block", flexShrink: 0 }}
+    >
+      <path
+        d="M2.6 4 L5 6.4 L7.4 4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.65"
+      />
+    </svg>
+  );
+}
+
 export type ActiveView = "all" | "working_on" | "custom" | "agent_tmp";
 
 interface TopBarProps {
@@ -293,10 +323,12 @@ function ViewSwitcher({
             background: "transparent",
             borderLeft: "1px solid var(--hairline)",
             padding: "0 8px",
-            fontSize: 9,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          ▾
+          <Chevron />
         </button>
       </div>
       <div
@@ -433,10 +465,12 @@ function ViewSwitcher({
             background: "transparent",
             borderLeft: "1px solid var(--hairline)",
             padding: "0 8px",
-            fontSize: 9,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          ▾
+          <Chevron />
         </button>
       </div>
       <button

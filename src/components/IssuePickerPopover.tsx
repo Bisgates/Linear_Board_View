@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { IssueRecord } from "../linear/types";
 import { projectColor } from "../lib/projectColor";
+import { Chevron } from "./TopBar";
 
 interface Props {
   issues: IssueRecord[];
@@ -151,7 +152,10 @@ export function IssuePickerPopover({ issues, workingOnIds, onAdd, targetView = "
           whiteSpace: "nowrap",
         }}
       >
-        Add issue ▾
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          Add issue
+          <Chevron />
+        </span>
       </button>
       {open && (
         <div
