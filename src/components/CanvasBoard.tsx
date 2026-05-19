@@ -486,6 +486,55 @@ function computeSnap(
   return { x: snappedX, y: snappedY, guides, gapGuides };
 }
 
+// Drag-to-reparent: given a dragged card's (live or final) top-left + size,
+// return the top-most other node whose bounding box contains the dragged
+// card's center point. Returns null when the center is over empty canvas or
+// only over the dragged card itself. Used both for the live hover cue and
+// for the drop-time reparent decision.
+function nodeAtCenterOf(
+  dragId: string,
+  dragPos: { x: number; y: number },
+  dragSize: { w: number; h: number },
+  excluded: ReadonlySet<string>,
+  current: Node[],
+): Node | null {
+  const cx = dragPos.x + dragSize.w / 2;
+  const cy = dragPos.y + dragSize.h / 2;
+  // Iterate in reverse so a card painted on top (later in the array) wins
+  // ties — matches what the user sees visually.
+  for (let i = current.length - 1; i >= 0; i--) {
+    const n = current[i]!;
+    if (n.id === dragId) continue;
+    if (excluded.has(n.id)) continue;
+    const { w, h } = nodeSize(n);
+    const left = n.position.x;
+    const top = n.position.y;
+    if (cx >= left && cx <= left + w && cy >= top && cy <= top + h) {
+      return n;
+    }
+  }
+  return null;
+}
+
+// Forward-walk the edge graph to enumerate every descendant of `rootId`
+// (transitively reachable via edge.source === ancestor). Used to prevent
+// cycles when reparenting: dropping A onto a descendant of A would create
+// a parent-child loop and crash the tidy / tree-render code paths.
+function collectDescendants(rootId: string, edges: ReadonlyArray<BoardEdge>): Set<string> {
+  const out = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    for (const e of edges) {
+      if (e.source !== cur) continue;
+      if (out.has(e.target)) continue;
+      out.add(e.target);
+      stack.push(e.target);
+    }
+  }
+  return out;
+}
+
 function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
   return data.edges.map((e) => ({
     id: e.id,
@@ -697,6 +746,17 @@ function BoardInner({
   const [snapGuides, setSnapGuides] = useState<Guide[]>([]);
   const [gapGuides, setGapGuides] = useState<GapGuide[]>([]);
 
+  // Live hover state for drag-to-reparent: while a card is being dragged and
+  // its center is inside another card's bbox, that other card is the
+  // "potential drop target" and gets a subtle outline. Ref-mirrored so the
+  // drop-end branch in onNodesChange can read the latest value synchronously
+  // without forcing the listener to re-create on every hover tick.
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const dropTargetIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    dropTargetIdRef.current = dropTargetId;
+  }, [dropTargetId]);
+
   const [edges, setEdges] = useState<Edge[]>([]);
 
   const issuesById = useMemo(() => {
@@ -868,11 +928,26 @@ function BoardInner({
   );
 
   // Augment note nodes with edit handlers (passed via data; functions are stable enough per render).
+  // Also paint a subtle drop-target outline on whichever node the user is
+  // currently hovering during a drag-to-reparent gesture (warm-red ring,
+  // matches the existing snap-guide / linking color language).
   const decoratedNodes = useMemo(() => {
     return nodes.map((n) => {
-      if (n.type !== "note") return n;
+      const isDropTarget = n.id === dropTargetId;
+      const nextStyle = isDropTarget
+        ? {
+            ...(n.style ?? {}),
+            boxShadow: "0 0 0 2px var(--warm-red)",
+            borderRadius: 10,
+            transition: "box-shadow 0.08s",
+          }
+        : n.style;
+      if (n.type !== "note") {
+        return isDropTarget ? { ...n, style: nextStyle } : n;
+      }
       return {
         ...n,
+        style: nextStyle,
         data: {
           ...n.data,
           onCommit: (patch: {
@@ -889,7 +964,7 @@ function BoardInner({
         } as unknown as Record<string, unknown>,
       };
     });
-  }, [nodes, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
+  }, [nodes, dropTargetId, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
 
   const decoratedEdges = useMemo(() => {
     return edges.map((e) => ({
@@ -1015,12 +1090,43 @@ function BoardInner({
           if (liveGapGuides) setGapGuides(liveGapGuides);
         }
 
+        // Drag-to-reparent hover detection. During an active drag, find the
+        // first dragged card whose post-snap center lies inside another
+        // (non-dragged) card's bbox — that other card is the potential drop
+        // target and gets a visual cue. Exclusion set = every id currently
+        // being dragged, so cards in a multi-select group don't see each
+        // other as drop targets.
+        if (anyLiveDrag) {
+          const liveDragIds = new Set<string>();
+          for (const c of adjusted) {
+            if (c.type === "position" && c.dragging === true) liveDragIds.add(c.id);
+          }
+          let hovered: string | null = null;
+          for (const c of adjusted) {
+            if (c.type !== "position" || c.dragging !== true || !c.position) continue;
+            const dragNode = current.find((n) => n.id === c.id);
+            if (!dragNode) continue;
+            const hit = nodeAtCenterOf(c.id, c.position, nodeSize(dragNode), liveDragIds, current);
+            if (hit) {
+              hovered = hit.id;
+              break;
+            }
+          }
+          if (dropTargetIdRef.current !== hovered) setDropTargetId(hovered);
+        }
+
         const next = applyNodeChanges(adjusted, current);
         const settled = adjusted.filter(
           (c): c is Extract<NodeChange, { type: "position" }> =>
             c.type === "position" && c.dragging === false,
         );
         if (settled.length > 0) {
+          // Read the last computed hover target (captured during the live
+          // drag) before we clear it — this is the parent every dragged card
+          // should be re-homed under.
+          const reparentTargetId = dropTargetIdRef.current;
+          if (reparentTargetId !== null) setDropTargetId(null);
+          const settledIds = new Set(settled.map((s) => s.id));
           setData((prev) => {
             const issueMembers = { ...prev.issueMembers };
             const noteNodes = [...prev.noteNodes];
@@ -1037,7 +1143,35 @@ function BoardInner({
                 }
               }
             }
-            return { ...prev, issueMembers, noteNodes };
+            // Reparent step (folded into the same setData so undo restores
+            // edges AND positions as one atomic step). A dragged card is
+            // reparented to `reparentTargetId` when: (a) it isn't the target
+            // itself, (b) the target is not a descendant of the dragged card
+            // (would create a cycle through the canvas edge graph).
+            let edges = prev.edges;
+            if (reparentTargetId !== null && settledIds.size > 0) {
+              const toReparent: string[] = [];
+              for (const draggedId of settledIds) {
+                if (draggedId === reparentTargetId) continue;
+                const descendants = collectDescendants(draggedId, prev.edges);
+                if (descendants.has(reparentTargetId)) continue;
+                toReparent.push(draggedId);
+              }
+              if (toReparent.length > 0) {
+                const drop = new Set(toReparent);
+                // Strip any existing parent edges pointing at the dragged
+                // cards — a node has at most one parent on the canvas.
+                edges = prev.edges.filter((e) => !drop.has(e.target));
+                for (const draggedId of toReparent) {
+                  edges.push({
+                    id: shortId("e"),
+                    source: reparentTargetId,
+                    target: draggedId,
+                  });
+                }
+              }
+            }
+            return { ...prev, issueMembers, noteNodes, edges };
           });
         }
         return next;

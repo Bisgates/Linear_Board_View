@@ -2,6 +2,9 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.30.0 [2026-05-19 11:55] — 拖卡到另一张卡上 → reparent
+  - 拖动中目标卡边框出现暖红 cue；旧 parent edge 自动清掉，多选拖整组改嫁同一 target，按 U 一步还原 edge + 位置
+
 - v0.29.0 [2026-05-19 11:55] — iCloud Drive 自动备份 + 一堆 bug 修
   - 每天 00:00/12:00/15:00/18:00/21:00 把整个 data 目录拷到 `~/Library/Mobile Documents/com~apple~CloudDocs/LinearBoardBackup/<时间戳>/`，保留最近 30 天；iCloud Drive 没开就静默跳过
   - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建，顺序回到 [A,B,N,C]（之前 N 总掉到最末尾）
