@@ -20,7 +20,7 @@ const SHORTCUTS: ShortcutRow[] = [
   { keys: ["G"], scope: "Canvas", desc: "Group selected cards for moving together (movement only); press G on a whole group to ungroup" },
   { keys: ["⌘ C", "Ctrl C"], scope: "Canvas", desc: "Copy current selection (cards + notes + their internal edges) to in-memory buffer" },
   { keys: ["⌘ V", "Ctrl V"], scope: "Canvas", desc: "Paste buffer into current view, centred on the viewport; duplicate issues are skipped" },
-  { keys: ["Esc"], scope: "Global", desc: "Cancel link mode / leave edit / close menus" },
+  { keys: ["Esc"], scope: "Global", desc: "Cancel link mode / leave edit / close menus / clear selection (DetailPanel + canvas halo)" },
   { keys: ["⌘ Enter", "Ctrl Enter"], scope: "Note edit", desc: "Commit note edit; plain Enter inserts newline" },
   { keys: ["Delete", "Backspace"], scope: "Canvas", desc: "Delete selected node(s) or edge(s)" },
   { keys: ["double-click empty"], scope: "Canvas", desc: "Create a new note at the cursor; textarea auto-focuses" },
@@ -28,6 +28,10 @@ const SHORTCUTS: ShortcutRow[] = [
   { keys: ["drag empty pane"], scope: "All views", desc: "Box select — touch is enough, no need to fully cover" },
   { keys: ["two-finger scroll"], scope: "All views", desc: "Pan the canvas" },
   { keys: ["pinch"], scope: "All views", desc: "Zoom in / out" },
+  { keys: ["A"], scope: "View switch", desc: "Switch to Agent_tmp" },
+  { keys: ["S"], scope: "View switch", desc: "Switch to All Issues" },
+  { keys: ["D"], scope: "View switch", desc: "Switch to latest Working On day view" },
+  { keys: ["1 - 9"], scope: "View switch", desc: "Activate the Nth pinned custom view (right-click a Custom dropdown row to pin)" },
 ];
 
 interface Props {

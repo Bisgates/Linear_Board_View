@@ -1,6 +1,36 @@
 import { useEffect, useRef, useState } from "react";
 import { TopBarMenu } from "./TopBarMenu";
 
+/**
+ * Minimal stroke-only chevron used by every "click to expand a dropdown"
+ * affordance in the top bar (ADD ISSUE ▾, WORKING ON ▾, CUSTOM ▾).
+ * Inherits `currentColor`, so it blends with whatever tab style sets `color`.
+ * 1.4px round-cap/-join strokes read as a proper chevron at 10–12px size
+ * — the unicode "▾" we used before was a filled triangle, too heavy next to
+ * the uppercase 11px labels.
+ */
+export function Chevron({ size = 10 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 10 10"
+      aria-hidden
+      style={{ display: "block", flexShrink: 0 }}
+    >
+      <path
+        d="M2.6 4 L5 6.4 L7.4 4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.65"
+      />
+    </svg>
+  );
+}
+
 export type ActiveView = "all" | "working_on" | "custom" | "agent_tmp";
 
 interface TopBarProps {
@@ -22,7 +52,16 @@ interface TopBarProps {
   onCustomExpand?: (anchor: { x: number; y: number; width: number }) => void;
   /** Double-click on the Custom tab commits a new name for the active custom view. */
   onRenameActiveCustom?: (name: string) => void;
-  leftSlot?: React.ReactNode;
+  /** Sits between the left cluster and the right ViewSwitcher group. */
+  centerSlot?: React.ReactNode;
+  /**
+   * Always-rendered chip that sits OUTSIDE the rest of the ViewSwitcher tabs
+   * but to the immediate left of the "All Issues" tab. Pinning it here
+   * (instead of conditionally inside the left zone) keeps the rest of the
+   * top bar's horizontal layout stable when the active view changes — the
+   * issue count and ViewSwitcher tabs no longer slide left/right.
+   */
+  addIssueSlot?: React.ReactNode;
   // Updater entry surfaced inside the hamburger menu (Tauri runtime only).
   showCheckUpdate?: boolean;
   checkUpdateBusy?: boolean;
@@ -43,7 +82,8 @@ export function TopBar({
   customLabel,
   onCustomExpand,
   onRenameActiveCustom,
-  leftSlot,
+  centerSlot,
+  addIssueSlot,
   showCheckUpdate,
   checkUpdateBusy,
   onCheckUpdate,
@@ -74,13 +114,19 @@ export function TopBar({
         >
           Linear Board
         </span>
-        {leftSlot}
+        {/* Fixed width so the count's digit/plural changes don't shift the
+            centerSlot (pinned chip strip) left edge as issues update. */}
         <span
           style={{
             fontSize: 11,
             color: "var(--muted)",
             letterSpacing: "0.12em",
             textTransform: "uppercase",
+            width: 110,
+            display: "inline-block",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
           {totalCount !== undefined && totalCount !== issueCount
@@ -88,7 +134,22 @@ export function TopBar({
             : `${issueCount} issue${issueCount === 1 ? "" : "s"}`}
         </span>
       </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          paddingLeft: 24,
+          paddingRight: 24,
+          minWidth: 0,
+          overflow: "hidden",
+        }}
+      >
+        {centerSlot}
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {addIssueSlot}
         <ViewSwitcher
           value={activeView}
           onChange={onViewChange}
@@ -202,23 +263,51 @@ function ViewSwitcher({
           }}
         >
           <span>Working On</span>
-          {workingOnLabel && (
-            <span
-              style={{
-                fontWeight: 400,
-                opacity: 0.7,
-                textTransform: "none",
-                letterSpacing: 0,
-                fontSize: 10,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: 200,
-              }}
-            >
-              · {workingOnLabel}
-            </span>
-          )}
+          {/* Suffix has a FIXED width (not maxWidth) so swapping the active
+              day-view via `d` / dropdown doesn't change the tab's outer
+              width — the rest of the bar stops sliding around. Middle dot is
+              its own span at a larger size, vertically centered between the
+              uppercase title and the lowercase label. */}
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              width: 100,
+              overflow: "hidden",
+            }}
+          >
+            {workingOnLabel && (
+              <>
+                <span
+                  aria-hidden
+                  style={{
+                    fontSize: 14,
+                    lineHeight: 1,
+                    opacity: 0.45,
+                    flexShrink: 0,
+                    transform: "translateY(-1px)",
+                  }}
+                >
+                  ·
+                </span>
+                <span
+                  style={{
+                    fontWeight: 400,
+                    opacity: 0.7,
+                    textTransform: "none",
+                    letterSpacing: 0,
+                    fontSize: 10,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {workingOnLabel}
+                </span>
+              </>
+            )}
+          </span>
         </button>
         <button
           aria-label="切换 Working On view"
@@ -234,10 +323,12 @@ function ViewSwitcher({
             background: "transparent",
             borderLeft: "1px solid var(--hairline)",
             padding: "0 8px",
-            fontSize: 9,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          ▾
+          <Chevron />
         </button>
       </div>
       <div
@@ -318,23 +409,46 @@ function ViewSwitcher({
               />
             </span>
           ) : (
-            customLabel && (
-              <span
-                style={{
-                  fontWeight: 400,
-                  opacity: 0.7,
-                  textTransform: "none",
-                  letterSpacing: 0,
-                  fontSize: 10,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  maxWidth: 200,
-                }}
-              >
-                · {customLabel}
-              </span>
-            )
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                width: 100,
+                overflow: "hidden",
+              }}
+            >
+              {customLabel && (
+                <>
+                  <span
+                    aria-hidden
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1,
+                      opacity: 0.45,
+                      flexShrink: 0,
+                      transform: "translateY(-1px)",
+                    }}
+                  >
+                    ·
+                  </span>
+                  <span
+                    style={{
+                      fontWeight: 400,
+                      opacity: 0.7,
+                      textTransform: "none",
+                      letterSpacing: 0,
+                      fontSize: 10,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {customLabel}
+                  </span>
+                </>
+              )}
+            </span>
           )}
         </button>
         <button
@@ -351,10 +465,12 @@ function ViewSwitcher({
             background: "transparent",
             borderLeft: "1px solid var(--hairline)",
             padding: "0 8px",
-            fontSize: 9,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          ▾
+          <Chevron />
         </button>
       </div>
       <button

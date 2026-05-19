@@ -20,14 +20,15 @@ import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
 import { useCustomViews, useWorkingOnViews } from "./lib/useWorkingOnViews";
+import { usePinnedTabs } from "./lib/usePinnedTabs";
 import { useAgentSessions } from "./lib/useAgentSessions";
+import { PinnedTabsStrip, type PinnedTabEntry } from "./components/PinnedTabsStrip";
 import { AgentCardProvider } from "./lib/agentCardContext";
 import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
 import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
-import type { ClipboardPayload } from "./lib/clipboard";
 
 let toastSeq = 0;
 
@@ -79,7 +80,6 @@ export default function App() {
     | { kind: "day" | "custom"; x: number; y: number; width: number }
     | null
   >(null);
-  const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
   const workingOnBoardRef = useRef<CanvasBoardHandle | null>(null);
   const allIssuesBoardRef = useRef<CanvasBoardHandle | null>(null);
   const customBoardRef = useRef<CanvasBoardHandle | null>(null);
@@ -509,6 +509,26 @@ export default function App() {
     [cv],
   );
 
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const name = wov.manifest?.views.find((v) => v.id === id)?.name ?? id;
+      const wasLast = (wov.manifest?.views.length ?? 0) <= 1;
+      await wov.deleteView(id);
+      pushToast("success", wasLast ? `已删除 "${name}"，已新建空白 day view` : `已删除 day view "${name}"`);
+    },
+    [wov, pushToast],
+  );
+
+  const handleDeleteCustom = useCallback(
+    async (id: string) => {
+      const name = cv.manifest?.views.find((v) => v.id === id)?.name ?? id;
+      const wasLast = (cv.manifest?.views.length ?? 0) <= 1;
+      await cv.deleteView(id);
+      pushToast("success", wasLast ? `已删除 "${name}"，已新建空白 custom view` : `已删除 custom view "${name}"`);
+    },
+    [cv, pushToast],
+  );
+
   // Dropdown lists views newest-first (by createdAt). Manifest order on disk
   // stays insertion order — we sort only for display.
   const sortedViews = useMemo(() => {
@@ -520,6 +540,78 @@ export default function App() {
     if (!cv.manifest) return [];
     return [...cv.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [cv.manifest]);
+
+  const customViewIds = useMemo(
+    () => cv.manifest?.views.map((v) => v.id) ?? [],
+    [cv.manifest],
+  );
+  const pinned = usePinnedTabs(customViewIds);
+
+  const pinnedTabEntries = useMemo<PinnedTabEntry[]>(() => {
+    if (!cv.manifest) return [];
+    const byId = new Map(cv.manifest.views.map((v) => [v.id, v]));
+    const out: PinnedTabEntry[] = [];
+    for (const id of pinned.order) {
+      const meta = byId.get(id);
+      if (meta) out.push({ viewId: id, name: meta.name });
+    }
+    return out;
+  }, [cv.manifest, pinned.order]);
+
+  const pinnedIdSet = useMemo(() => new Set(pinned.order), [pinned.order]);
+
+  const handleActivatePinned = useCallback(
+    (viewId: string) => {
+      cv.setActiveId(viewId);
+      setActiveView("custom");
+    },
+    [cv],
+  );
+
+  // Global keyboard shortcuts for view switching. Single-letter, no modifier.
+  // CanvasBoard owns F/U/G/C/Tab/Space/arrows; a/s/d/1-9 are free.
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const onKey = (evt: KeyboardEvent) => {
+      if (evt.defaultPrevented) return;
+      if (evt.metaKey || evt.ctrlKey || evt.altKey || evt.shiftKey) return;
+      if (shortcutsOpen || dropdownAnchor) return;
+      if (isEditable(evt.target) || isEditable(document.activeElement)) return;
+
+      const k = evt.key;
+      if (k === "a" || k === "A") {
+        setActiveView("agent_tmp");
+        return;
+      }
+      if (k === "s" || k === "S") {
+        setActiveView("all");
+        return;
+      }
+      if (k === "d" || k === "D") {
+        const latest =
+          wov.manifest && wov.manifest.views.length > 0
+            ? [...wov.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+            : null;
+        if (latest) wov.setActiveId(latest.id);
+        setActiveView("working_on");
+        return;
+      }
+      if (/^[1-9]$/.test(k)) {
+        const idx = parseInt(k, 10) - 1;
+        const entry = pinnedTabEntries[idx];
+        if (!entry) return;
+        cv.setActiveId(entry.viewId);
+        setActiveView("custom");
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shortcutsOpen, dropdownAnchor, wov, cv, pinnedTabEntries]);
 
   return (
     <div
@@ -547,12 +639,35 @@ export default function App() {
         showCheckUpdate={showCheckUpdate}
         checkUpdateBusy={checkUpdateBusy}
         onCheckUpdate={handleCheckUpdate}
-        leftSlot={
-          activeView === "working_on" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
-          ) : activeView === "custom" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
-          ) : null
+        addIssueSlot={
+          <IssuePickerPopover
+            issues={allIssues}
+            workingOnIds={
+              activeView === "custom" ? customIds : workingOnIds
+            }
+            onAdd={
+              activeView === "custom"
+                ? addToCustom
+                : activeView === "working_on"
+                  ? addToWorkingOn
+                  : () => {}
+            }
+            targetView={
+              activeView === "working_on"
+                ? "working_on"
+                : activeView === "custom"
+                  ? "custom"
+                  : null
+            }
+          />
+        }
+        centerSlot={
+          <PinnedTabsStrip
+            tabs={pinnedTabEntries}
+            activeViewId={activeView === "custom" ? cv.activeId : null}
+            onActivate={handleActivatePinned}
+            onReorder={pinned.reorder}
+          />
         }
       />
       {dropdownAnchor?.kind === "day" && wov.manifest && (
@@ -562,7 +677,7 @@ export default function App() {
           onPick={handlePick}
           onCreate={handleCreate}
           onRename={wov.renameView}
-          onDelete={wov.deleteView}
+          onDelete={handleDelete}
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
           kind="day"
@@ -575,10 +690,13 @@ export default function App() {
           onPick={handlePickCustom}
           onCreate={handleCreateCustom}
           onRename={cv.renameView}
-          onDelete={cv.deleteView}
+          onDelete={handleDeleteCustom}
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
           kind="custom"
+          pinnedIds={pinnedIdSet}
+          onPin={pinned.pin}
+          onUnpin={pinned.unpin}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -630,8 +748,6 @@ export default function App() {
                 issueNodeType="agentIssue"
                 onSelectIssue={setSelectedId}
                 selectedIssueId={selectedId}
-                clipboard={clipboard}
-                setClipboard={setClipboard}
                 onClipboardToast={pushToast}
               />
             </AgentCardProvider>
@@ -649,8 +765,6 @@ export default function App() {
               loadingLabel="loading all_issues_board…"
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           ) : activeView === "custom" ? (
@@ -666,8 +780,6 @@ export default function App() {
               loadingLabel={`loading ${customViewName ?? "custom"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           ) : (
@@ -683,8 +795,6 @@ export default function App() {
               loadingLabel={`loading ${activeViewName ?? "working_on"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           )}

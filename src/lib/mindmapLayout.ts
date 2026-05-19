@@ -182,10 +182,10 @@ export function computeChildPos(
  * it's treated as a root: a new same-column root is placed below it and
  * parentId is returned as null (caller skips adding an edge).
  *
- * Places the new sibling below ALL existing siblings (max sibling Y +
- * siblingDy), not just below the focused one. This matters because the
- * downstream tidy preserves children order by current Y — placing it below
- * everyone guarantees the new card lands last in the layout.
+ * Places the new sibling IMMEDIATELY AFTER `currentId` in y-order so the
+ * downstream tidy (which sorts siblings by current Y) sees the new card
+ * between current and the next sibling. If current is already the last
+ * sibling, falls back to "below current by siblingDy".
  *
  * Same dumb-insert philosophy as computeChildPos: no collision push-down.
  */
@@ -203,21 +203,29 @@ export function computeSiblingPos(
     .sort((a, b) => a.id.localeCompare(b.id));
   const parentId = incoming.length > 0 ? incoming[0]!.source : null;
 
-  // Lowest Y among siblings (children of parentId). Includes `current` itself.
-  // For a root (parentId === null), there is no parent to enumerate siblings
-  // from, so fall back to "below current".
-  let lowestY = current.y;
+  // Find the next sibling below `current` (smallest sib.y greater than current.y).
+  // For a root (parentId === null) there's no parent to enumerate siblings from,
+  // so we just place below current.
+  let nextSiblingY: number | null = null;
   if (parentId !== null) {
     for (const e of data.edges) {
       if (e.source !== parentId) continue;
+      if (e.target === currentId) continue;
       const sib = getNode(e.target, nodes);
       if (!sib) continue;
-      if (sib.y > lowestY) lowestY = sib.y;
+      if (sib.y <= current.y) continue;
+      if (nextSiblingY === null || sib.y < nextSiblingY) nextSiblingY = sib.y;
     }
   }
 
   const newX = current.x;
-  const newY = lowestY + config.siblingDy;
+  // If there's a next sibling, drop the new card at the midpoint so a
+  // sort-by-y put it in slot [current, NEW, next, ...]. Otherwise just step
+  // down by siblingDy as before.
+  const newY =
+    nextSiblingY !== null
+      ? (current.y + nextSiblingY) / 2
+      : current.y + config.siblingDy;
 
   return { parentId, x: newX, y: newY, shifts: [] };
 }
@@ -266,36 +274,49 @@ export interface TidyMove {
  * Walk outgoing edges from `rootId` to build a parent→children adjacency map
  * restricted to the subtree, cycle-safe. Children are sorted by current Y so
  * the resulting layout preserves the user's visual ordering when possible.
+ *
+ * Ordering rule:
+ *  - PRIMARY: child's current Y (top-most child sits top-most after tidy).
+ *  - TIE-BREAKER: edge-array index from `edges`. This matters for newly
+ *    inserted siblings (Shift+Tab) whose Y hasn't been measured by
+ *    ReactFlow yet within the RAF that runs tidy — they would otherwise
+ *    sort as +Infinity and land at the END of the sibling row, regardless
+ *    of the midpoint Y `computeSiblingPos` produced. Insertion order in
+ *    the `edges` array thus becomes the authoritative fallback (caller is
+ *    expected to splice the new edge in the desired slot, NOT append).
  */
 function buildChildrenMap(
   rootId: string,
   edges: EdgeLike[],
   nodes: NodeGeo[],
 ): Map<string, string[]> {
+  const edgeIndex = new Map<string, number>();
+  edges.forEach((e, i) => edgeIndex.set(e.id, i));
+
   const out = new Map<string, string[]>();
   const visited = new Set<string>([rootId]);
   const queue: string[] = [rootId];
   while (queue.length > 0) {
     const cur = queue.shift()!;
-    const kids: string[] = [];
+    const kids: { id: string; edgeIdx: number }[] = [];
     for (const e of edges) {
       if (e.source !== cur) continue;
       if (visited.has(e.target)) continue;
       visited.add(e.target);
-      kids.push(e.target);
+      kids.push({ id: e.target, edgeIdx: edgeIndex.get(e.id) ?? Number.POSITIVE_INFINITY });
       queue.push(e.target);
     }
-    // Stable order: sort by the child's CURRENT Y so the tidied result
-    // preserves the user's intent (top-most stays top-most). Missing geo
-    // (e.g. a note just inserted by Tab whose measurement hasn't propagated
-    // to ReactFlow's store before our RAF tidy fires) sorts LAST — newly
-    // added cards land at the bottom of their sibling row, not the top.
     kids.sort((a, b) => {
-      const na = getNode(a, nodes);
-      const nb = getNode(b, nodes);
-      return (na?.y ?? Number.POSITIVE_INFINITY) - (nb?.y ?? Number.POSITIVE_INFINITY);
+      const na = getNode(a.id, nodes);
+      const nb = getNode(b.id, nodes);
+      const ya = na?.y ?? Number.POSITIVE_INFINITY;
+      const yb = nb?.y ?? Number.POSITIVE_INFINITY;
+      if (ya !== yb) return ya - yb;
+      // Tie / both unmeasured → fall back to the edges-array order so the
+      // caller's splice position is honored.
+      return a.edgeIdx - b.edgeIdx;
     });
-    out.set(cur, kids);
+    out.set(cur, kids.map((k) => k.id));
   }
   return out;
 }

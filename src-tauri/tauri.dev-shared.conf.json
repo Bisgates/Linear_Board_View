@@ -4,7 +4,8 @@
   "app": {
     "windows": [
       {
-        "title": "Linear Board (dev)"
+        "title": "Linear Board (dev)",
+        "focus": false
       }
     ]
   },

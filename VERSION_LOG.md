@@ -2,6 +2,58 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.33.7 [2026-05-19 17:30] — ADD ISSUE / WORKING ON / CUSTOM 的 ▾ 换成 stroke chevron
+  - unicode "▾" 是黑色实心三角，跟旁边 uppercase 11px label 视觉权重不搭；改成 10px 矩形 viewBox 内 1.4px stroke chevron，opacity 0.65 跟 paper 颜色调和
+
+- v0.33.6 [2026-05-19 17:25] — WORKING ON / CUSTOM tab 中间分隔点单独画大一号
+  - middle dot 跟 label 拆成两个 span，dot fontSize 10 → 14、垂直对中、opacity 0.45，跟 uppercase title 视觉上对齐
+
+- v0.33.5 [2026-05-19 17:20] — WORKING ON 后缀宽度 140 → 100，原本留太多空白
+
+- v0.33.4 [2026-05-19 17:15] — pinned chip 拖排序换 pointer events 实现
+  - HTML5 DnD 在 Tauri WebKit 上被 OS-level 文件拖入服务拦截不工作；改成 setPointerCapture + 4px threshold 自己实现拖动，单击仍 activate，超过阈值才进 drag
+
+- v0.33.3 [2026-05-19 17:05] — issue count 固定宽度，0/1/N 切换不再带着中部 chip 抖动
+
+- v0.33.2 [2026-05-19 17:00] — 顶栏 tab 不再随 d / 1-9 切 view 抖动 + pinned chip 拖排序修复
+  - WORKING ON / CUSTOM 后缀从 maxWidth → 固定 width，按钮外宽锁定；AGENT_TMP 和 ☰ 钉死在右边不再左右滑
+  - PinnedTabsStrip 拖动逻辑用 ref 镜像 dragIdx，React 异步 state 批处理引起的"首个 dragover 没 preventDefault" race 修了，chip 现在真的能拖换位
+
+- v0.33.1 [2026-05-19 16:55] — drop 判定调成"放松"而非"收紧"
+  - 上一版 0.33.0 把判定 bbox 缩到 60% 中心区，跟 user 要的"放松"方向相反；改 1.2 倍向外扩，蹭边也能 reparent
+
+- v0.33.0 [2026-05-19 16:50] — 粘图卡更干净 + drop 光晕染目标色 + 拖判定收紧
+  - 只有图片没文字的 note 不再显示顶部 "NOTE" 标识，粘图即图卡
+  - drop-target 光晕颜色跟随目标 note 自己 swatch（issue 仍走暖红 fallback），不再永远红
+  - 拖判定从整张 target bbox 收紧到中心 60% 区域，蹭边不再误触发 reparent
+
+- v0.32.0 [2026-05-19 15:51] — ⌘V 走 OS clipboard 单一路径 + 空格聚焦视觉中心 + drag-reparent 自动 tidy + drop cue 改光晕
+  - ⌘C 把卡片打包成 `linear-board-cards:<base64>` envelope 写进系统剪贴板；⌘V 只看系统剪贴板：图片→图，envelope→卡，纯文本→新建 note，空→不动；内存 buffer 整条退役
+  - 没焦点时按空格自动把 halo 落到 viewport 视觉中心最近的卡，并 pan 进舒适区（不进 edit，也不开 DetailPanel）
+  - 拖一张卡丢到另一张上完成 reparent：edge 重连 + 同帧整理 A 子树到 B 右侧；落到自己 descendant 上识别为 cycle，只移位置不 reparent；空白处 drop 只移位置不整理
+  - drag 时悬停 target 的视觉反馈从 2px 红边换成两层暖红光晕（rgba 0.18 + 0.35），读起来是"卡在发光"不是"卡被画框"
+
+- v0.31.0 [2026-05-19 14:35] — UI 调（zoom / 方向键 pan / ADD ISSUE 固定位）+ Shift+Tab 顺序 fix 二次修
+  - 缩放上限从 200% 收到 120%，再怎么 pinch 也不会把卡片放成全屏怪兽
+  - 方向键换 halo 后顺手把新焦点 pan 到 viewport 舒适区（25%–75%），靠边的卡也居中露脸
+  - ADD ISSUE 按钮永远显示在右侧 ViewSwitcher 左边；不在 Working On / Custom 时按钮 disable + tooltip 提示，再不让顶栏 chip 左右滑动
+  - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建终于真的回到 [A,B,N,C]（v0.29.0 那一波只改了 Y 没改 edges 顺序也没处理 ReactFlow 测量未到位的情况）
+
+- v0.30.0 [2026-05-19 11:55] — 拖卡到另一张卡上 → reparent
+  - 拖动中目标卡边框出现暖红 cue；旧 parent edge 自动清掉，多选拖整组改嫁同一 target，按 U 一步还原 edge + 位置
+
+- v0.29.0 [2026-05-19 11:55] — iCloud Drive 自动备份 + 一堆 bug 修
+  - 每天 00:00/12:00/15:00/18:00/21:00 把整个 data 目录拷到 `~/Library/Mobile Documents/com~apple~CloudDocs/LinearBoardBackup/<时间戳>/`，保留最近 30 天；iCloud Drive 没开就静默跳过
+  - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建，顺序回到 [A,B,N,C]（之前 N 总掉到最末尾）
+  - ⌘V：剪贴板里有图片优先粘图片，没图片才粘内存里的卡片 buffer（之前粘卡片永远赢，截屏后 ⌘V 也是粘旧卡片）
+  - Esc：依次退连线模式 → 退编辑 → 清选中（halo + DetailPanel 一起清空），不再被 WebKit 默认行为捎带退出 app 全屏
+  - 方向键换 halo 时清空其他多选，不再把多张卡同时高亮成"全选"
+  - dropdown 里 × 删 view 真的能删，最后一个 view 删完会自动新建空白 view，操作完弹 toast
+  - 给 backupNow() Tauri 命令供 tester / 手动触发
+
+- v0.28.0 [2026-05-19 11:43] — Custom view 可右键 pin 到顶栏 chip 条 + 单键切换视图（A/S/D/1–9）
+  - chip 支持拖拽排序，顺序持久化；右键 Custom 下拉行出现 Pin/Unpin 菜单
+
 - v0.27.2 [2026-05-18 20:55] — F tidy 换成 slot-based 布局，浅叶子不再被深叶子兄弟挤同一行
   - 兄弟子树深浅不等时旧算法允许深叶子"溜"到浅叶子旁边，视觉上不像树
 

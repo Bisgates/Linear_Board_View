@@ -149,24 +149,65 @@ export function useViewsList(
     [manifest, persist],
   );
 
+  // Delete a view. If it's the LAST one, auto-mint a fresh blank replacement
+  // so the user never lands in an empty-state UI — the typical "I want to
+  // wipe this view and start over" intent. The old delete used to silently
+  // no-op when only one view existed, leaving the × button visibly broken.
   const deleteView = useCallback(
     async (id: string): Promise<void> => {
       const current = manifest;
       if (!current) return;
-      if (current.views.length <= 1) return;
-      const remaining = current.views.filter((v) => v.id !== id);
-      const newActive = current.activeId === id ? remaining[0]!.id : current.activeId;
-      const next: ViewsManifest = { views: remaining, activeId: newActive };
-      const saved = await persist(next);
-      if (saved) {
+      if (!current.views.some((v) => v.id === id)) return;
+
+      // Last view → swap in a brand new blank view in one persist round-trip,
+      // then drop the old board file.
+      if (current.views.length === 1) {
+        const newId = shortId(idPrefix);
+        const existingNames = current.views.filter((v) => v.id !== id).map((v) => v.name);
+        const finalName = uniqueName(
+          defaultNameRef.current(existingNames),
+          existingNames,
+        );
+        const replacement: ViewMeta = {
+          id: newId,
+          name: finalName,
+          createdAt: new Date().toISOString(),
+        };
+        try {
+          await client.saveBoard(newId, {
+            issueMembers: {},
+            noteNodes: [],
+            edges: [],
+            groups: [],
+          });
+        } catch (e) {
+          console.error(`[useViewsList ${client.kind}] replacement save failed`, e);
+          onErrorRef.current?.(e);
+          return;
+        }
+        const next: ViewsManifest = { views: [replacement], activeId: newId };
+        const saved = await persist(next);
+        if (!saved) return;
         try {
           await client.deleteBoard(id);
         } catch (e) {
           console.warn(`[useViewsList ${client.kind}] board file delete failed (manifest already updated)`, e);
         }
+        return;
+      }
+
+      const remaining = current.views.filter((v) => v.id !== id);
+      const newActive = current.activeId === id ? remaining[0]!.id : current.activeId;
+      const next: ViewsManifest = { views: remaining, activeId: newActive };
+      const saved = await persist(next);
+      if (!saved) return;
+      try {
+        await client.deleteBoard(id);
+      } catch (e) {
+        console.warn(`[useViewsList ${client.kind}] board file delete failed (manifest already updated)`, e);
       }
     },
-    [manifest, persist, client],
+    [manifest, persist, client, idPrefix],
   );
 
   const activeId = manifest?.activeId ?? null;

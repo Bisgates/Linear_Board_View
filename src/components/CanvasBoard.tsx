@@ -62,6 +62,59 @@ function mintCardIdFor(notes: ReadonlyArray<{ cardId?: string }>): string | unde
   for (const n of notes) if (n.cardId) taken.add(n.cardId);
   return generateCardId(new Date(), taken) ?? undefined;
 }
+
+// OS-clipboard envelope for card copy/paste. Going through the system
+// clipboard (not in-memory React state) is the only source of truth — see
+// v0.32.0. The prefix is intentionally namespaced so the V key can tell a
+// cards payload from arbitrary text the user happens to have copied.
+const CARDS_CLIPBOARD_PREFIX = "linear-board-cards:";
+
+function encodeCardsEnvelope(payload: ClipboardPayload): string {
+  const json = JSON.stringify(payload);
+  // btoa needs Latin-1; use the encodeURIComponent → unescape dance so
+  // multi-byte UTF-8 (Chinese note bodies, emoji) survives the round trip.
+  const b64 =
+    typeof btoa === "function"
+      ? btoa(unescape(encodeURIComponent(json)))
+      : json;
+  return `${CARDS_CLIPBOARD_PREFIX}${b64}`;
+}
+
+function decodeCardsEnvelope(text: string): ClipboardPayload | null {
+  if (!text.startsWith(CARDS_CLIPBOARD_PREFIX)) return null;
+  const b64 = text.slice(CARDS_CLIPBOARD_PREFIX.length).trim();
+  try {
+    const json =
+      typeof atob === "function"
+        ? decodeURIComponent(escape(atob(b64)))
+        : b64;
+    const parsed = JSON.parse(json) as ClipboardPayload;
+    if (!parsed || !Array.isArray(parsed.items) || !Array.isArray(parsed.edges)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// Two-layer soft glow rendered on the prospective drop-target during a
+// drag-to-reparent. Colors derive from --warm-red (rgb 168,85,98) so they
+// stay on-palette. Replaces the v0.30 2px hard ring — should read as a
+// gentle glow, not a hard outline.
+// Two-layer outer glow keyed to the target card's accent color: a thin inner
+// halo at 0.22 alpha + a soft 16px bloom at 0.38 alpha. Falls back to the
+// warm-red for cards without a user-pickable color (e.g. Linear issues).
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return [168, 85, 98]; // warm-red
+  const n = parseInt(m[1]!, 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+function dropGlowFor(color: string | null | undefined): string {
+  const [r, g, b] = hexToRgb(color ?? "#a85562");
+  return `0 0 0 4px rgba(${r}, ${g}, ${b}, 0.22), 0 0 16px 4px rgba(${r}, ${g}, ${b}, 0.38)`;
+}
 const EDGE_TYPES: EdgeTypes = {
   labeled: LabeledEdge as unknown as EdgeTypes[string],
 };
@@ -91,9 +144,6 @@ interface CanvasBoardProps {
   loadingLabel?: string;
   /** When set to "agentIssue", IssueCard is swapped for AgentIssueCard. Default "issue". */
   issueNodeType?: "issue" | "agentIssue";
-  /** App-level clipboard buffer (shared across boards). When provided, ⌘C/⌘V are enabled. */
-  clipboard?: ClipboardPayload | null;
-  setClipboard?: (p: ClipboardPayload | null) => void;
   /** Lightweight toast hook used to surface "N items skipped" notices and the
    *  cardId copy confirmation. Reused for any board-internal toast. */
   onClipboardToast?: (kind: "info" | "success" | "error", msg: string) => void;
@@ -486,6 +536,61 @@ function computeSnap(
   return { x: snappedX, y: snappedY, guides, gapGuides };
 }
 
+// Drag-to-reparent: given a dragged card's (live or final) top-left + size,
+// return the top-most other node whose bounding box contains the dragged
+// card's center point. Returns null when the center is over empty canvas or
+// only over the dragged card itself. Used both for the live hover cue and
+// for the drop-time reparent decision.
+// Drag-to-reparent hit-test: the dragged card's center must fall inside the
+// target's expanded box (120% of bbox, centered) before we treat the target as
+// a reparent candidate — slightly bigger than the visible card so users don't
+// have to land dead-center to trigger a reparent.
+const DROP_HIT_RATIO = 1.2;
+
+function nodeAtCenterOf(
+  dragId: string,
+  dragPos: { x: number; y: number },
+  dragSize: { w: number; h: number },
+  excluded: ReadonlySet<string>,
+  current: Node[],
+): Node | null {
+  const cx = dragPos.x + dragSize.w / 2;
+  const cy = dragPos.y + dragSize.h / 2;
+  for (let i = current.length - 1; i >= 0; i--) {
+    const n = current[i]!;
+    if (n.id === dragId) continue;
+    if (excluded.has(n.id)) continue;
+    const { w, h } = nodeSize(n);
+    const innerW = w * DROP_HIT_RATIO;
+    const innerH = h * DROP_HIT_RATIO;
+    const left = n.position.x + (w - innerW) / 2;
+    const top = n.position.y + (h - innerH) / 2;
+    if (cx >= left && cx <= left + innerW && cy >= top && cy <= top + innerH) {
+      return n;
+    }
+  }
+  return null;
+}
+
+// Forward-walk the edge graph to enumerate every descendant of `rootId`
+// (transitively reachable via edge.source === ancestor). Used to prevent
+// cycles when reparenting: dropping A onto a descendant of A would create
+// a parent-child loop and crash the tidy / tree-render code paths.
+function collectDescendants(rootId: string, edges: ReadonlyArray<BoardEdge>): Set<string> {
+  const out = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    for (const e of edges) {
+      if (e.source !== cur) continue;
+      if (out.has(e.target)) continue;
+      out.add(e.target);
+      stack.push(e.target);
+    }
+  }
+  return out;
+}
+
 function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
   return data.edges.map((e) => ({
     id: e.id,
@@ -618,8 +723,6 @@ function BoardInner({
   initialPositions,
   loadingLabel,
   issueNodeType = "issue",
-  clipboard,
-  setClipboard,
   onClipboardToast,
   viewKey,
   forwardedRef,
@@ -655,6 +758,26 @@ function BoardInner({
   const [linking, setLinking] = useState<
     { mode: "off" } | { mode: "source" } | { mode: "target"; source: string }
   >({ mode: "off" });
+  // Drag-to-reparent: live hover target during a single-card drag. Drives the
+  // soft drop-cue glow on the candidate parent. Cleared on drag end (regardless
+  // of whether the drop actually reparented).
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // Mirror the latest dropTargetId in a ref so onNodesChange can read the
+  // "drop landed on X" decision atomically at dragging=false without racing
+  // the state batch from the previous tick's hit-test.
+  const dropTargetIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    dropTargetIdRef.current = dropTargetId;
+  }, [dropTargetId]);
+  // Identity of the card currently being dragged. Used to (a) exclude self
+  // from drop-target hit testing and (b) detect "drop on own descendant" so
+  // we can refuse the reparent without confusing the user.
+  const dragNodeIdRef = useRef<string | null>(null);
+  // Late-bound handles for tidy + geo helpers — declared further down, so we
+  // mirror them through refs to avoid TDZ in onNodesChange's deps array.
+  // Filled in below where the originals live.
+  const getNodeGeosRef = useRef<(() => NodeGeo[]) | null>(null);
+  const applyTidyMovesRef = useRef<((moves: TidyMove[]) => void) | null>(null);
   const reactFlow = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
@@ -672,6 +795,7 @@ function BoardInner({
     }),
     [reactFlow],
   );
+
 
   // When the underlying view changes (e.g. user picks another Working On view
   // from the dropdown), refit the viewport so they land on content, not empty
@@ -868,13 +992,40 @@ function BoardInner({
   );
 
   // Augment note nodes with edit handlers (passed via data; functions are stable enough per render).
+  // Paint the two-layer soft drop-cue glow on the prospective reparent target
+  // via the xyflow node wrapper's `style` — sits outside the card's own
+  // border-radius so it reads as a halo around the card, not a ring on top.
   const decoratedNodes = useMemo(() => {
     return nodes.map((n) => {
-      if (n.type !== "note") return n;
+      const isDropTarget = dropTargetId !== null && n.id === dropTargetId;
+      const targetAccent =
+        isDropTarget && n.type === "note"
+          ? ((n.data as { color?: string } | undefined)?.color ?? DEFAULT_NOTE_COLOR)
+          : null;
+      const withStyle = isDropTarget
+        ? {
+            ...n,
+            style: {
+              ...(n.style ?? {}),
+              boxShadow: dropGlowFor(targetAccent),
+              borderRadius: 10,
+              transition: "box-shadow 0.15s ease-out",
+            },
+          }
+        : n.style && (n.style as { boxShadow?: string }).boxShadow
+          ? (() => {
+              const rest = { ...(n.style as Record<string, unknown>) };
+              delete rest.boxShadow;
+              delete rest.borderRadius;
+              delete rest.transition;
+              return { ...n, style: rest };
+            })()
+          : n;
+      if (withStyle.type !== "note") return withStyle;
       return {
-        ...n,
+        ...withStyle,
         data: {
-          ...n.data,
+          ...withStyle.data,
           onCommit: (patch: {
             body?: string;
             color?: string;
@@ -882,14 +1033,14 @@ function BoardInner({
             done?: boolean;
             images?: NoteImage[];
             textSegments?: string[];
-          }) => commitNote(n.id, patch),
+          }) => commitNote(withStyle.id, patch),
           onEditEnd: noteEditingFinished,
           resolveCardLink,
           onJumpToCardNode: jumpToNode,
         } as unknown as Record<string, unknown>,
       };
     });
-  }, [nodes, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
+  }, [nodes, dropTargetId, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
 
   const decoratedEdges = useMemo(() => {
     return edges.map((e) => ({
@@ -1015,12 +1166,86 @@ function BoardInner({
           if (liveGapGuides) setGapGuides(liveGapGuides);
         }
 
+        // Drag-to-reparent hover detection. During an active drag, find the
+        // first dragged card whose post-snap center lies inside another
+        // (non-dragged) card's bbox — that other card is the potential drop
+        // target and gets a visual cue. Exclusion set = every id currently
+        // being dragged, so cards in a multi-select group don't see each
+        // other as drop targets.
+        if (anyLiveDrag) {
+          const liveDragIds = new Set<string>();
+          for (const c of adjusted) {
+            if (c.type === "position" && c.dragging === true) liveDragIds.add(c.id);
+          }
+          let hovered: string | null = null;
+          for (const c of adjusted) {
+            if (c.type !== "position" || c.dragging !== true || !c.position) continue;
+            const dragNode = current.find((n) => n.id === c.id);
+            if (!dragNode) continue;
+            const hit = nodeAtCenterOf(c.id, c.position, nodeSize(dragNode), liveDragIds, current);
+            if (hit) {
+              hovered = hit.id;
+              break;
+            }
+          }
+          if (dropTargetIdRef.current !== hovered) setDropTargetId(hovered);
+        }
+
         const next = applyNodeChanges(adjusted, current);
+
+        // Drag-to-reparent — single-card drag only (groups skip both the
+        // glow and the reparent so the drop is purely positional). On live
+        // drag we hit-test the dragged card's center against every other
+        // card's rect and stash the first hit as the prospective drop
+        // target; on drag-end we read the same ref to decide whether to
+        // actually rewire edges. Recomputing at drag-end (instead of
+        // trusting the live state) keeps us correct even when WebKit
+        // collapses the final tick.
+        const livePositionChanges = adjusted.filter(
+          (c): c is Extract<NodeChange, { type: "position" }> =>
+            c.type === "position" && c.dragging === true && !!c.position,
+        );
+        if (livePositionChanges.length === 1) {
+          const c = livePositionChanges[0]!;
+          if (dragNodeIdRef.current !== c.id) dragNodeIdRef.current = c.id;
+          const dragged = current.find((n) => n.id === c.id);
+          if (dragged) {
+            const { w: dw, h: dh } = nodeSize(dragged);
+            const cx = (c.position?.x ?? dragged.position.x) + dw / 2;
+            const cy = (c.position?.y ?? dragged.position.y) + dh / 2;
+            let hit: string | null = null;
+            for (const n of current) {
+              if (n.id === c.id) continue;
+              const { w, h } = nodeSize(n);
+              const left = n.position.x;
+              const right = left + w;
+              const top = n.position.y;
+              const bottom = top + h;
+              if (cx >= left && cx <= right && cy >= top && cy <= bottom) {
+                hit = n.id;
+                break;
+              }
+            }
+            // Functional setState — bail early if unchanged to avoid the
+            // re-render churn during a 60Hz drag.
+            setDropTargetId((prev) => (prev === hit ? prev : hit));
+          }
+        }
+
         const settled = adjusted.filter(
           (c): c is Extract<NodeChange, { type: "position" }> =>
             c.type === "position" && c.dragging === false,
         );
         if (settled.length > 0) {
+          // Snapshot the reparent target before clearing it. setData rewrites
+          // edges in the same call as positions so undo restores both as one
+          // step. `reparented` flips true iff at least one edge actually
+          // changed — gates the post-RAF auto-tidy below.
+          const reparentTargetId = dropTargetIdRef.current;
+          if (reparentTargetId !== null) setDropTargetId(null);
+          const settledIds = new Set(settled.map((s) => s.id));
+          let reparented = false;
+
           setData((prev) => {
             const issueMembers = { ...prev.issueMembers };
             const noteNodes = [...prev.noteNodes];
@@ -1037,8 +1262,60 @@ function BoardInner({
                 }
               }
             }
-            return { ...prev, issueMembers, noteNodes };
+            // Reparent every settled card under `reparentTargetId` (a node
+            // has at most one canvas parent → strip any existing incoming
+            // parent edge first, then add target→dragged). Cards that would
+            // form a cycle (target is one of their descendants) are skipped.
+            // `reparented` flags whether any edge actually changed, so the
+            // post-commit RAF auto-tidy only fires for real reparents.
+            let edges = prev.edges;
+            if (reparentTargetId !== null && settledIds.size > 0) {
+              const toReparent: string[] = [];
+              for (const draggedId of settledIds) {
+                if (draggedId === reparentTargetId) continue;
+                const descendants = collectDescendants(draggedId, prev.edges);
+                if (descendants.has(reparentTargetId)) continue;
+                toReparent.push(draggedId);
+              }
+              if (toReparent.length > 0) {
+                const drop = new Set(toReparent);
+                edges = prev.edges.filter((e) => !drop.has(e.target));
+                for (const draggedId of toReparent) {
+                  edges.push({
+                    id: shortId("e"),
+                    source: reparentTargetId,
+                    target: draggedId,
+                  });
+                }
+                reparented = true;
+              }
+            }
+            if (edges === prev.edges) {
+              return { ...prev, issueMembers, noteNodes };
+            }
+            return { ...prev, issueMembers, noteNodes, edges };
           });
+
+          // Schedule a global tidy one frame later so React commits the new
+          // edges + the rebuild effect re-syncs nodes before we read geos.
+          // Pure positional drags (no edge mutation, no cycle skip) are NOT
+          // tidied — drag-only stays a low-cost movement.
+          if (reparented) {
+            requestAnimationFrame(() => {
+              const geoFn = getNodeGeosRef.current;
+              const applyFn = applyTidyMovesRef.current;
+              if (!geoFn || !applyFn) return;
+              const moves = tidyAllRoots(
+                geoFn(),
+                dataRef.current.edges,
+                DEFAULT_TIDY_CONFIG,
+              );
+              if (moves.length > 0) applyFn(moves);
+            });
+          }
+
+          dragNodeIdRef.current = null;
+          if (dropTargetIdRef.current !== null) setDropTargetId(null);
         }
         return next;
       });
@@ -1145,6 +1422,9 @@ function BoardInner({
         DEFAULT_LAYOUT_CONFIG.defaultH,
     }));
   }, [reactFlow]);
+  useEffect(() => {
+    getNodeGeosRef.current = getNodeGeos;
+  }, [getNodeGeos]);
 
   // Imperatively focus a note's textarea by id — wins races with ReactFlow's
   // pane focus refresh and StrictMode mount/cleanup. Used by every code path
@@ -1171,11 +1451,20 @@ function BoardInner({
   // Apply the layout helpers' `shifts` array to issueMembers + noteNodes,
   // append the new note + (optional) edge, and emit one combined setData.
   // Used by both Tab (child) and Shift+Tab (sibling).
+  //
+  // `pivotChildId` — only set by Shift+Tab. When provided, the new parent→N
+  // edge is spliced into `edges` IMMEDIATELY AFTER the edge
+  // (parentEdgeSource → pivotChildId), instead of appended. This guarantees
+  // a deterministic [..., pivot, NEW, nextSibling, ...] sibling order even
+  // when ReactFlow hasn't measured the new node yet (so its Y reads as
+  // +Infinity in the immediate RAF tidy and the y-sort fallback in
+  // buildChildrenMap kicks in).
   const insertCardWithLayout = useCallback(
     (
       placement: { x: number; y: number; shifts: { id: string; dy: number }[] },
       parentEdgeSource: string | null,
       color: string,
+      pivotChildId?: string,
     ) => {
       const newId = shortId("n");
       const newEdgeId = shortId("e");
@@ -1190,17 +1479,34 @@ function BoardInner({
           return sh ? { ...n, y: n.y + sh.dy } : n;
         });
         noteNodes.push({ id: newId, body: "", x: placement.x, y: placement.y, color, cardId: mintCardIdFor(prev.noteNodes) });
-        const edges =
-          parentEdgeSource !== null
-            ? [
-                ...prev.edges,
-                {
-                  id: newEdgeId,
-                  source: parentEdgeSource,
-                  target: newId,
-                } satisfies BoardEdge,
-              ]
-            : prev.edges;
+        let edges: BoardEdge[] = prev.edges;
+        if (parentEdgeSource !== null) {
+          const newEdge: BoardEdge = {
+            id: newEdgeId,
+            source: parentEdgeSource,
+            target: newId,
+          };
+          if (pivotChildId) {
+            // Splice immediately after the pivot's incoming edge from the
+            // same parent. If we can't find one (defensive — caller invariant
+            // says pivotChildId must already be a child of parentEdgeSource),
+            // fall back to append.
+            const pivotIdx = prev.edges.findIndex(
+              (e) => e.source === parentEdgeSource && e.target === pivotChildId,
+            );
+            if (pivotIdx >= 0) {
+              edges = [
+                ...prev.edges.slice(0, pivotIdx + 1),
+                newEdge,
+                ...prev.edges.slice(pivotIdx + 1),
+              ];
+            } else {
+              edges = [...prev.edges, newEdge];
+            }
+          } else {
+            edges = [...prev.edges, newEdge];
+          }
+        }
         return { ...prev, issueMembers, noteNodes, edges };
       });
       setFocusedCardId(newId);
@@ -1291,6 +1597,9 @@ function BoardInner({
     },
     [setData],
   );
+  useEffect(() => {
+    applyTidyMovesRef.current = applyTidyMoves;
+  }, [applyTidyMoves]);
 
   useEffect(
     () => () => {
@@ -1332,9 +1641,13 @@ function BoardInner({
       if (evt.metaKey || evt.ctrlKey || evt.altKey) return;
       const editable = isEditable(evt.target) || isEditable(document.activeElement);
 
-      // Esc has two jobs: clear link mode first, then exit note-edit (keep halo).
+      // Esc cascade: link mode → note-edit → clear selection. preventDefault
+      // so WebKit doesn't intercept and exit the app's macOS fullscreen.
+      // Bails early if an unrelated text input has focus so its own escape
+      // (blur/cancel) keeps working.
       if (evt.key === "Escape") {
         if (linking.mode !== "off") {
+          evt.preventDefault();
           setLinking({ mode: "off" });
           return;
         }
@@ -1344,6 +1657,15 @@ function BoardInner({
           // focusedCardId untouched — halo stays on the card we just exited.
           return;
         }
+        if (editable) return; // some other input owns the Esc — leave it alone
+        // Clear selection: focused-card halo, ReactFlow's per-node `selected`
+        // flag, and the App-level DetailPanel selection.
+        evt.preventDefault();
+        setFocusedCardId(null);
+        setNodes((current) =>
+          current.map((n) => (n.selected ? { ...n, selected: false } : n)),
+        );
+        onSelectIssue?.(null);
         return;
       }
 
@@ -1451,14 +1773,29 @@ function BoardInner({
 
       // Arrow-key navigation — no preventDefault unless a target was found,
       // so unhandled arrows still bubble (e.g. before the user clicks anything).
+      // Clears every other ReactFlow selection first so any prior box-select /
+      // multi-select doesn't survive (otherwise the rebuild's preserve-selected
+      // branch would carry old halos forward and you'd end up with many cards
+      // glowing at once).
       const dir = ARROW_DIR[evt.key];
       if (dir) {
         const focusId = focusedCardIdRef.current;
         if (!focusId) return;
-        const next = findNeighbor(focusId, dir, getNodeGeos());
+        const geos = getNodeGeos();
+        const next = findNeighbor(focusId, dir, geos);
         if (next) {
           evt.preventDefault();
+          setNodes((current) =>
+            current.map((n) =>
+              n.selected && n.id !== next ? { ...n, selected: false } : n,
+            ),
+          );
           setFocusedCardId(next);
+          // Pan the new focus into the visual comfort zone — same helper Tab
+          // uses for fresh cards, so even an already-on-screen but edge-hugging
+          // neighbor recenters into the central 50% of the viewport.
+          const geo = geos.find((g) => g.id === next);
+          if (geo) ensureNodeVisible(next, geo.x, geo.y, geo.w, geo.h);
         }
         return;
       }
@@ -1466,10 +1803,51 @@ function BoardInner({
       // Space — Note: editingNoteIdRef.current check is mostly defensive;
       // when the textarea is open the listener has already bailed via the
       // `editable` guard above.
+      //
+      // No halo yet (focusId == null): the first Space press picks the card
+      // closest to the canvas pane's visual center, drops a halo on it, and
+      // pans it into the comfort zone. It does NOT open DetailPanel / enter
+      // edit mode — that's reserved for the next Space press.
       if (evt.key === " " || evt.code === "Space") {
-        const focusId = focusedCardIdRef.current;
-        if (!focusId) return;
         if (editingNoteIdRef.current) return;
+        const focusId = focusedCardIdRef.current;
+        if (!focusId) {
+          const wrapper = wrapperRef.current;
+          if (!wrapper) return;
+          const geos = getNodeGeos();
+          if (geos.length === 0) return;
+          const rect = wrapper.getBoundingClientRect();
+          const centerScreen = {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2,
+          };
+          const center = reactFlow.screenToFlowPosition(centerScreen);
+          let best: NodeGeo | null = null;
+          let bestD = Infinity;
+          for (const g of geos) {
+            const cx = g.x + g.w / 2;
+            const cy = g.y + g.h / 2;
+            const dx = cx - center.x;
+            const dy = cy - center.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestD) {
+              bestD = d;
+              best = g;
+            }
+          }
+          if (!best) return;
+          evt.preventDefault();
+          const id = best.id;
+          setNodes((current) =>
+            current.map((n) => {
+              if (n.id === id) return n.selected ? n : { ...n, selected: true };
+              return n.selected ? { ...n, selected: false } : n;
+            }),
+          );
+          setFocusedCardId(id);
+          ensureNodeVisible(id, best.x, best.y, best.w, best.h);
+          return;
+        }
         const isNote = dataRef.current.noteNodes.some((n) => n.id === focusId);
         evt.preventDefault();
         if (isNote) {
@@ -1500,7 +1878,11 @@ function BoardInner({
           placement = { x: p.x, y: p.y };
           const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = currentNote?.color ?? DEFAULT_NOTE_COLOR;
-          newId = insertCardWithLayout(p, p.parentId, color);
+          // Pass focusId as the pivot so the new parent→N edge gets spliced
+          // immediately after the parent→focus edge — keeps siblings in
+          // [..., focus, N, nextSib, ...] order even before ReactFlow has
+          // measured the new card.
+          newId = insertCardWithLayout(p, p.parentId, color, focusId);
         } else {
           const p = computeChildPos(focusId, dataRef.current, geos);
           if (!p) return;
@@ -1513,7 +1895,39 @@ function BoardInner({
         // rebuilds its nodes — otherwise getNodeGeos() wouldn't see the
         // inserted card and tidyAllRoots would skip it.
         requestAnimationFrame(() => {
-          const movesAll = tidyAllRoots(getNodeGeos(), dataRef.current.edges, DEFAULT_TIDY_CONFIG);
+          // Build the geo table from BOTH ReactFlow's measured store AND the
+          // authoritative `dataRef.current`. ReactFlow can lag one frame
+          // behind a fresh setData (new node not yet committed to its
+          // store), in which case the new card's y reads as undefined and
+          // buildChildrenMap sorts it to the END of its siblings — that's
+          // the v0.29.x regression. Filling in missing geos from data
+          // guarantees the just-inserted card has its intended midpoint y
+          // by the time tidy runs.
+          const liveGeos = getNodeGeos();
+          const seen = new Set(liveGeos.map((g) => g.id));
+          const filler: NodeGeo[] = [];
+          for (const n of dataRef.current.noteNodes) {
+            if (seen.has(n.id)) continue;
+            filler.push({
+              id: n.id,
+              x: n.x,
+              y: n.y,
+              w: DEFAULT_LAYOUT_CONFIG.defaultW,
+              h: DEFAULT_LAYOUT_CONFIG.defaultH,
+            });
+          }
+          for (const [id, p] of Object.entries(dataRef.current.issueMembers)) {
+            if (seen.has(id)) continue;
+            filler.push({
+              id,
+              x: p.x,
+              y: p.y,
+              w: DEFAULT_LAYOUT_CONFIG.defaultW,
+              h: DEFAULT_LAYOUT_CONFIG.defaultH,
+            });
+          }
+          const geosAtTidy = liveGeos.concat(filler);
+          const movesAll = tidyAllRoots(geosAtTidy, dataRef.current.edges, DEFAULT_TIDY_CONFIG);
           if (movesAll.length > 0) applyTidyMoves(movesAll);
           if (!newId || !placement) return;
           // Final position = tidied move, falling back to ReactFlow geo, then
@@ -1535,12 +1949,232 @@ function BoardInner({
     return () => window.removeEventListener("keydown", onKey);
   }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData, applyTidyMoves, ensureNodeVisible]);
 
-  // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
-  // Lives in a separate effect from the main board hotkeys so the modifier
-  // early-return in there can stay simple. Only enabled when the App passes
-  // clipboard state through (so the board never copies in isolation).
+  // Shared image-paste handler. Both the ⌘V keydown branch (when the OS
+  // clipboard holds an image, in which case it wins over the in-memory
+  // cards buffer) and the native `paste` event (drag-drop / non-keyboard
+  // paste flows) funnel through here so the targeting + sizing logic stays
+  // in one place.
+  const pasteImageBlob = useCallback(
+    (blob: Blob) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result || "");
+        if (!src.startsWith("data:image/")) return;
+        const probe = new Image();
+        probe.onload = () => {
+          const nw = probe.naturalWidth || 256;
+          const nh = probe.naturalHeight || 192;
+
+          const editingId = editingNoteIdRef.current;
+          let targetId: string | null = null;
+          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
+            targetId = editingId;
+          } else {
+            const selectedNote = reactFlow.getNodes().find(
+              (n) => n.selected && n.type === "note",
+            );
+            if (selectedNote) targetId = selectedNote.id;
+          }
+
+          const TARGET_W = 280 - 8 - 24;
+          const w = Math.min(nw, TARGET_W);
+          const h = Math.max(1, Math.round((w / nw) * nh));
+          const newImg: NoteImage = { id: shortId("img"), src, w, h };
+
+          if (targetId) {
+            const id = targetId;
+            setData((prev) => ({
+              ...prev,
+              noteNodes: prev.noteNodes.map((n) => {
+                if (n.id !== id) return n;
+                const imgs = [...(n.images ?? []), newImg];
+                const prevSegs =
+                  Array.isArray(n.textSegments) &&
+                  n.textSegments.length === (n.images ?? []).length + 1
+                    ? n.textSegments
+                    : (n.images ?? []).length === 0
+                      ? [n.body ?? ""]
+                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
+                const nextSegs = [...prevSegs, ""];
+                return {
+                  ...n,
+                  images: imgs,
+                  textSegments: nextSegs,
+                  body: nextSegs.join("\n"),
+                };
+              }),
+            }));
+            return;
+          }
+
+          const rect = wrapperRef.current?.getBoundingClientRect();
+          const centerScreen = rect
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+          const center = reactFlow.screenToFlowPosition(centerScreen);
+          const id = shortId("n");
+          setData((prev) => ({
+            ...prev,
+            noteNodes: [
+              ...prev.noteNodes,
+              {
+                id,
+                body: "",
+                x: center.x,
+                y: center.y,
+                images: [newImg],
+                textSegments: ["", ""],
+                cardId: mintCardIdFor(prev.noteNodes),
+              },
+            ],
+          }));
+          setFocusedCardId(id);
+        };
+        probe.src = src;
+      };
+      reader.readAsDataURL(blob);
+    },
+    [reactFlow, setData],
+  );
+
+  // ⌘C / ⌘V — clipboard copy/paste of selected cards.
+  //
+  // v0.32.0 — the OS clipboard is the ONLY source of truth. ⌘C writes a
+  // namespaced envelope (`linear-board-cards:<base64-JSON>`) via
+  // navigator.clipboard.writeText. ⌘V probes navigator.clipboard.read():
+  //
+  //   1. image mime present       → image paste (existing path)
+  //   2. text starts with prefix  → decode envelope, paste cards
+  //   3. plain text (no prefix)   → paste as a single note's body
+  //   4. empty / read failed      → noop
+  //
+  // We deliberately keep zero in-memory clipboard state — earlier versions
+  // had an "OS image > in-memory cards" fallback that surprised the user
+  // (⌘V kept pasting old cards even when their actual clipboard was a
+  // fresh screenshot or plain text). Going through the OS clipboard also
+  // gives cross-app interop for free.
+  const pasteCardsPayload = useCallback(
+    (payload: ClipboardPayload) => {
+      if (!payload || payload.items.length === 0) return;
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const centerScreen = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      const center = reactFlow.screenToFlowPosition(centerScreen);
+
+      const localIdxToNewId: (string | null)[] = payload.items.map((it) => {
+        if (it.kind === "note") return shortId("n");
+        return it.id;
+      });
+
+      let skippedIssues = 0;
+      let addedIssues = 0;
+      let addedNotes = 0;
+
+      setData((prev) => {
+        const issueMembers = { ...prev.issueMembers };
+        const noteNodes = [...prev.noteNodes];
+        const existingNoteIds = new Set(noteNodes.map((n) => n.id));
+        const addedNodeIds = new Set<string>();
+
+        payload.items.forEach((it, idx) => {
+          const x = center.x + it.dx;
+          const y = center.y + it.dy;
+          if (it.kind === "issue") {
+            if (issueMembers[it.id]) {
+              skippedIssues += 1;
+              localIdxToNewId[idx] = null;
+              return;
+            }
+            issueMembers[it.id] = { x, y };
+            addedNodeIds.add(it.id);
+            addedIssues += 1;
+          } else {
+            let id = localIdxToNewId[idx];
+            if (!id || existingNoteIds.has(id)) {
+              id = shortId("n");
+              localIdxToNewId[idx] = id;
+            }
+            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
+              id,
+              body: it.body,
+              x,
+              y,
+              cardId: mintCardIdFor(noteNodes),
+            };
+            if (it.color) note.color = it.color;
+            if (it.working) note.working = true;
+            if (it.done) note.done = true;
+            noteNodes.push(note);
+            existingNoteIds.add(id);
+            addedNodeIds.add(id);
+            addedNotes += 1;
+          }
+        });
+
+        const newEdges: BoardEdge[] = [];
+        for (const e of payload.edges) {
+          const s = localIdxToNewId[e.sourceLocalIdx];
+          const t = localIdxToNewId[e.targetLocalIdx];
+          if (!s || !t) continue;
+          if (!addedNodeIds.has(s) || !addedNodeIds.has(t)) continue;
+          const out: BoardEdge = { id: shortId("e"), source: s, target: t };
+          if (e.label) out.label = e.label;
+          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
+          if (e.targetHandle) out.targetHandle = e.targetHandle;
+          newEdges.push(out);
+        }
+
+        return {
+          ...prev,
+          issueMembers,
+          noteNodes,
+          edges: [...prev.edges, ...newEdges],
+        };
+      });
+
+      const parts: string[] = [];
+      if (addedIssues) parts.push(`${addedIssues} issue`);
+      if (addedNotes) parts.push(`${addedNotes} note`);
+      const summary = parts.length ? parts.join(" + ") : "0 项";
+      const note = skippedIssues ? `（${skippedIssues} 个 issue 已存在跳过）` : "";
+      onClipboardToast?.(
+        skippedIssues && !addedIssues && !addedNotes ? "info" : "success",
+        `粘贴 ${summary}${note}`,
+      );
+    },
+    [reactFlow, setData, onClipboardToast],
+  );
+
+  const pasteTextAsNote = useCallback(
+    (text: string) => {
+      const body = text.trim();
+      if (!body) return;
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const centerScreen = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      const center = reactFlow.screenToFlowPosition(centerScreen);
+      const id = shortId("n");
+      setData((prev) => ({
+        ...prev,
+        noteNodes: [
+          ...prev.noteNodes,
+          {
+            id,
+            body,
+            x: center.x,
+            y: center.y,
+            cardId: mintCardIdFor(prev.noteNodes),
+          },
+        ],
+      }));
+      setFocusedCardId(id);
+    },
+    [reactFlow, setData],
+  );
+
   useEffect(() => {
-    if (!setClipboard) return;
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
@@ -1597,115 +2231,69 @@ function BoardInner({
           edges.push(out);
         }
 
-        setClipboard({ items, edges, copiedAt: Date.now() });
-        onClipboardToast?.(
-          "success",
-          `已复制 ${items.length} 项${edges.length ? ` + ${edges.length} 条 edge` : ""}`,
-        );
+        const payload: ClipboardPayload = { items, edges, copiedAt: Date.now() };
+        const envelope = encodeCardsEnvelope(payload);
+        const writeAsync = async () => {
+          try {
+            await navigator.clipboard.writeText(envelope);
+            onClipboardToast?.(
+              "success",
+              `已复制 ${items.length} 项${edges.length ? ` + ${edges.length} 条 edge` : ""}`,
+            );
+          } catch (err) {
+            console.error("[⌘C] clipboard write failed", err);
+            onClipboardToast?.("error", `复制失败: ${String(err)}`);
+          }
+        };
+        void writeAsync();
         return;
       }
 
-      // Paste branch
-      if (!clipboard || clipboard.items.length === 0) return;
+      // ⌘V — OS clipboard is the only source. preventDefault unconditionally
+      // so WebKit doesn't synthesize a `paste` event into a focused input;
+      // we route to image / cards / plain-text branches ourselves.
       evt.preventDefault();
-      const rect = wrapperRef.current?.getBoundingClientRect();
-      const centerScreen = rect
-        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-      const center = reactFlow.screenToFlowPosition(centerScreen);
-
-      // Pre-compute final ids per local index so edges can reference them.
-      // For issue items we reuse the original id; for note items we mint fresh.
-      const localIdxToNewId: (string | null)[] = clipboard.items.map((it) => {
-        if (it.kind === "note") return shortId("n");
-        return it.id;
-      });
-
-      let skippedIssues = 0;
-      let addedIssues = 0;
-      let addedNotes = 0;
-
-      setData((prev) => {
-        const issueMembers = { ...prev.issueMembers };
-        const noteNodes = [...prev.noteNodes];
-        const existingNoteIds = new Set(noteNodes.map((n) => n.id));
-        const addedNodeIds = new Set<string>();
-
-        clipboard.items.forEach((it, idx) => {
-          const x = center.x + it.dx;
-          const y = center.y + it.dy;
-          if (it.kind === "issue") {
-            if (issueMembers[it.id]) {
-              skippedIssues += 1;
-              localIdxToNewId[idx] = null;
-              return;
-            }
-            issueMembers[it.id] = { x, y };
-            addedNodeIds.add(it.id);
-            addedIssues += 1;
-          } else {
-            // Defensive — if the freshly minted id somehow collides, mint again.
-            let id = localIdxToNewId[idx];
-            if (!id || existingNoteIds.has(id)) {
-              id = shortId("n");
-              localIdxToNewId[idx] = id;
-            }
-            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
-              id,
-              body: it.body,
-              x,
-              y,
-              cardId: mintCardIdFor(noteNodes),
-            };
-            if (it.color) note.color = it.color;
-            if (it.working) note.working = true;
-            if (it.done) note.done = true;
-            noteNodes.push(note);
-            existingNoteIds.add(id);
-            addedNodeIds.add(id);
-            addedNotes += 1;
+      const dispatchPaste = async () => {
+        // 1. Image branch — `clipboard.read()` exposes image mimes.
+        try {
+          const items = await navigator.clipboard.read();
+          for (const item of items) {
+            const imgType = item.types.find((t) => t.startsWith("image/"));
+            if (!imgType) continue;
+            const blob = await item.getType(imgType);
+            pasteImageBlob(blob);
+            return;
           }
-        });
-
-        const newEdges: BoardEdge[] = [];
-        for (const e of clipboard.edges) {
-          const s = localIdxToNewId[e.sourceLocalIdx];
-          const t = localIdxToNewId[e.targetLocalIdx];
-          if (!s || !t) continue;
-          if (!addedNodeIds.has(s) || !addedNodeIds.has(t)) continue;
-          const out: BoardEdge = { id: shortId("e"), source: s, target: t };
-          if (e.label) out.label = e.label;
-          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
-          if (e.targetHandle) out.targetHandle = e.targetHandle;
-          newEdges.push(out);
+        } catch {
+          // clipboard.read can reject (no permission, no image data). Fall
+          // through to text branch.
         }
-
-        return {
-          ...prev,
-          issueMembers,
-          noteNodes,
-          edges: [...prev.edges, ...newEdges],
-        };
-      });
-
-      const parts: string[] = [];
-      if (addedIssues) parts.push(`${addedIssues} issue`);
-      if (addedNotes) parts.push(`${addedNotes} note`);
-      const summary = parts.length ? parts.join(" + ") : "0 项";
-      const note = skippedIssues ? `（${skippedIssues} 个 issue 已存在跳过）` : "";
-      onClipboardToast?.(skippedIssues && !addedIssues && !addedNotes ? "info" : "success", `粘贴 ${summary}${note}`);
+        // 2. Text branch — envelope wins; otherwise paste as a single note.
+        let text = "";
+        try {
+          text = await navigator.clipboard.readText();
+        } catch {
+          return;
+        }
+        if (!text) return;
+        const cards = decodeCardsEnvelope(text);
+        if (cards) {
+          pasteCardsPayload(cards);
+          return;
+        }
+        pasteTextAsNote(text);
+      };
+      void dispatchPaste();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast]);
+  }, [reactFlow, onClipboardToast, pasteImageBlob, pasteCardsPayload, pasteTextAsNote]);
 
-  // Paste an image from the system clipboard. Target priority:
-  //   1. note currently being edited → append to it
-  //   2. the single selected note (if any) → append to it
-  //   3. otherwise → mint a fresh note at the viewport centre that wraps the
-  //      image (user pastes in empty space).
-  // preventDefault is called only when an image is found, so plain-text paste
-  // into a textarea still works.
+  // Paste an image from the system clipboard. Target priority lives in
+  // `pasteImageBlob`. This listener handles non-keyboard paste flows (the
+  // ⌘V keydown branch above intercepts the kbd path and probes the OS
+  // clipboard directly). preventDefault is called only when an image is
+  // found, so plain-text paste into a textarea still works.
   useEffect(() => {
     const onPaste = (evt: ClipboardEvent) => {
       const dt = evt.clipboardData;
@@ -1720,98 +2308,11 @@ function BoardInner({
       }
       if (!file) return;
       evt.preventDefault();
-
-      const reader = new FileReader();
-      reader.onload = () => {
-        const src = String(reader.result || "");
-        if (!src.startsWith("data:image/")) return;
-        // Probe natural dims so the embedded image keeps its real aspect ratio.
-        const probe = new Image();
-        probe.onload = () => {
-          const nw = probe.naturalWidth || 256;
-          const nh = probe.naturalHeight || 192;
-
-          const editingId = editingNoteIdRef.current;
-          let targetId: string | null = null;
-          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
-            targetId = editingId;
-          } else {
-            const selectedNote = reactFlow.getNodes().find(
-              (n) => n.selected && n.type === "note",
-            );
-            if (selectedNote) targetId = selectedNote.id;
-          }
-
-          // Card is fixed at 280; outer paddings eat 8px and the inner paper
-          // eats another 24px → 248 inner content width is the cap.
-          const TARGET_W = 280 - 8 - 24;
-          const w = Math.min(nw, TARGET_W);
-          const h = Math.max(1, Math.round((w / nw) * nh));
-          const newImg: NoteImage = { id: shortId("img"), src, w, h };
-
-          if (targetId) {
-            const id = targetId;
-            setData((prev) => ({
-              ...prev,
-              // Append the image at the end and grow textSegments by one
-              // empty slot so the new image sits between the previous
-              // trailing segment and a fresh empty textarea (user can type
-              // below it). Existing trailing segment text is preserved.
-              noteNodes: prev.noteNodes.map((n) => {
-                if (n.id !== id) return n;
-                const imgs = [...(n.images ?? []), newImg];
-                const prevSegs =
-                  Array.isArray(n.textSegments) &&
-                  n.textSegments.length === (n.images ?? []).length + 1
-                    ? n.textSegments
-                    : (n.images ?? []).length === 0
-                      ? [n.body ?? ""]
-                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
-                const nextSegs = [...prevSegs, ""];
-                return {
-                  ...n,
-                  images: imgs,
-                  textSegments: nextSegs,
-                  body: nextSegs.join("\n"),
-                };
-              }),
-            }));
-            return;
-          }
-
-          // Empty-space paste → new note at viewport centre. textSegments has
-          // two empty slots so the image is wrapped by a textarea above and
-          // below — both editable so the user can add text either side.
-          const rect = wrapperRef.current?.getBoundingClientRect();
-          const centerScreen = rect
-            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-          const center = reactFlow.screenToFlowPosition(centerScreen);
-          const id = shortId("n");
-          setData((prev) => ({
-            ...prev,
-            noteNodes: [
-              ...prev.noteNodes,
-              {
-                id,
-                body: "",
-                x: center.x,
-                y: center.y,
-                images: [newImg],
-                textSegments: ["", ""],
-                cardId: mintCardIdFor(prev.noteNodes),
-              },
-            ],
-          }));
-          setFocusedCardId(id);
-        };
-        probe.src = src;
-      };
-      reader.readAsDataURL(file);
+      pasteImageBlob(file);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [reactFlow, setData]);
+  }, [pasteImageBlob]);
 
   // Drag the entire group by grabbing the dashed frame's empty interior
   // (frame sits at zIndex -1 so cards still catch clicks on their own area).
@@ -2162,6 +2663,7 @@ function BoardInner({
         edgesFocusable
         deleteKeyCode={["Backspace", "Delete"]}
         {...SHARED_FLOW_PROPS}
+        maxZoom={1.2}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="rgba(120,116,108,0.38)" />
         <ViewportPortal>

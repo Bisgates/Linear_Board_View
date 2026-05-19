@@ -606,7 +606,10 @@ function NoteCardImpl({ data, selected }: Props) {
           gap: 8,
         }}
       >
-        <span>Note</span>
+        {/* Image-only notes (no text segments with content) skip the "Note"
+            label — paste-an-image should produce a clean picture card, not
+            a NOTE-stamped placeholder. */}
+        <span style={{ opacity: segments.some((s) => s.trim().length > 0) ? 1 : 0 }}>Note</span>
         <button
           type="button"
           role="checkbox"

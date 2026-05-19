@@ -11,8 +11,8 @@
 # Single shared data dir:    ~/Library/Application Support/com.han.linearboard.dev/data
 #
 # Usage:
-#   scripts/run-dev.sh                # launch tauri dev; seed data dir if missing
-#   scripts/run-dev.sh --reset-data   # wipe + reseed data dir from prod first
+#   scripts/run-dev.sh                # default: sync fresh prod data into dev dir each launch
+#   scripts/run-dev.sh --keep-data    # preserve current dev data dir, skip prod sync
 
 set -euo pipefail
 
@@ -33,30 +33,29 @@ CONF="$REPO_ROOT/src-tauri/tauri.dev-shared.conf.json"
 PROD_DATA_SRC="$HOME/Library/Application Support/com.han.linearboard/data"
 DEV_DATA_DIR="$HOME/Library/Application Support/com.han.linearboard.dev/data"
 
-reset_data=0
+keep_data=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --reset-data) reset_data=1; shift ;;
+    --keep-data) keep_data=1; shift ;;
+    --reset-data) keep_data=0; shift ;;  # kept for backward compat (default behavior now)
     *) echo "run-dev.sh: unknown flag '$1'" >&2; exit 1 ;;
   esac
 done
 
-if [ "$reset_data" -eq 1 ] && [ -e "$DEV_DATA_DIR" ]; then
-  echo ">> --reset-data: removing $DEV_DATA_DIR"
-  rm -rf "$DEV_DATA_DIR"
-fi
-
-if [ ! -d "$DEV_DATA_DIR" ]; then
-  if [ -d "$PROD_DATA_SRC" ]; then
-    echo ">> seeding shared dev data from prod"
-    echo "   $PROD_DATA_SRC -> $DEV_DATA_DIR"
-    mkdir -p "$(dirname "$DEV_DATA_DIR")"
-    cp -RL "$PROD_DATA_SRC" "$DEV_DATA_DIR"
+if [ "$keep_data" -eq 1 ] && [ -d "$DEV_DATA_DIR" ]; then
+  echo ">> --keep-data: reusing existing dev data dir without prod sync"
+elif [ -d "$PROD_DATA_SRC" ]; then
+  if [ -e "$DEV_DATA_DIR" ]; then
+    echo ">> syncing fresh prod data into shared dev (default — overwrites dev data)"
+    rm -rf "$DEV_DATA_DIR"
   else
-    echo ">> prod data not found at $PROD_DATA_SRC — dev app will start with an empty data dir"
+    echo ">> seeding shared dev data from prod"
   fi
+  echo "   $PROD_DATA_SRC -> $DEV_DATA_DIR"
+  mkdir -p "$(dirname "$DEV_DATA_DIR")"
+  cp -RL "$PROD_DATA_SRC" "$DEV_DATA_DIR"
 else
-  echo ">> reusing existing dev data dir: $DEV_DATA_DIR"
+  echo ">> prod data not found at $PROD_DATA_SRC — dev app will start with whatever's in $DEV_DATA_DIR (possibly empty)"
 fi
 
 echo ">> launching: npx tauri dev --config $CONF"
