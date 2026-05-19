@@ -65,11 +65,25 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 
 ### 路由规则（主 agent 收到新需求时）
 
+**第一步：分类，不要直接派。** user 一股脑给一堆改动时（"修这个/加那个/改这个"五六条），先在主窗口列一张表：每条改动属于哪个**架构域**（canvas 行为 / 顶栏 UI / Rust 后端 / dev infra / Linear API / 数据 schema …），哪些撞同一文件或同一函数。然后**按架构域切，不按需求条数切**。
+
+切分启发式（实战 sweet spot = 2-3 个 agent）：
+
+1. **同文件同函数** → 一个 agent。避免 merge 冲突，上下文复用更连贯。
+2. **同模块不同函数** → 一个 agent。同人改一块连贯，思路不切换。
+3. **跨模块独立 feature** → 各自 agent 并行。前提是确实独立，不要为了"并行"硬拆。
+4. **5+ 个 agent 并行不要做** —— worktree 聚合时 `VERSION_LOG.md` / `package.json` 必然冲突，hunk 数量随分支数指数增长。
+5. **1 个 agent 8+ 项任务也不要做** —— 上下文稀释，agent 在某一项上会偷懒（实测：5 项打包给一个 agent，其中一项 Shift+Tab 修复没自测就报 PASS，回弹了一轮）。
+
+具体路由动作：
+
 1. 先看在跑的 implementer subagent 列表 + 各自 scope。
-2. 新需求**逻辑上属于某个 in-flight implementer 的范围** → `SendMessage` 把任务加派给该 agent，**不要**开新 worktree。
-3. 新需求是独立 feature → 起新 worktree + 新 implementer subagent。
+2. 新需求**逻辑上属于某个 in-flight implementer 的范围**（同域、同文件、同改动方向）→ `SendMessage` 把任务加派给该 agent，**不要**开新 worktree。
+3. 新需求**跨域独立** → 起新 worktree + 新 implementer subagent。
 4. 同一 implementer 的多个任务**作为一组**进 tester 队列 —— 一次 tester run 覆盖整组，不是用户每发一条消息就排一次。
-5. 上限：同时 ~8 个并行 worktree。
+5. 上限：同时 ~3 个并行 worktree 是稳态甜区，硬上限 ~8。
+
+**回归任务的硬规则**：tester 上一轮报 PASS 但 user 实测 fail（"你说修了但其实没修"），下一轮回弹给 implementer 时，brief 里**强制要求 implementer 自己跑 Quartz 端到端验证完才能 commit**，不能只 tsc 通过就 ready。tester 这一层不能当唯一兜底 —— 跑得多了断言条件会糙。原因：tester 的断言往往看 edges 数组长度、文件 mtime 这种 proxy 指标，跟"用户实际看到的视觉/行为顺序"有 gap；二次修必须打掉这个 gap。
 
 ### Ready 队列（跨 worktree 共享，绝对路径）
 
