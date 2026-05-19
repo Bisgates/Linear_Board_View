@@ -2,6 +2,11 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.33.0 [2026-05-19 16:50] — 粘图卡更干净 + drop 光晕染目标色 + 拖判定收紧
+  - 只有图片没文字的 note 不再显示顶部 "NOTE" 标识，粘图即图卡
+  - drop-target 光晕颜色跟随目标 note 自己 swatch（issue 仍走暖红 fallback），不再永远红
+  - 拖判定从整张 target bbox 收紧到中心 60% 区域，蹭边不再误触发 reparent
+
 - v0.32.0 [2026-05-19 15:51] — ⌘V 走 OS clipboard 单一路径 + 空格聚焦视觉中心 + drag-reparent 自动 tidy + drop cue 改光晕
   - ⌘C 把卡片打包成 `linear-board-cards:<base64>` envelope 写进系统剪贴板；⌘V 只看系统剪贴板：图片→图，envelope→卡，纯文本→新建 note，空→不动；内存 buffer 整条退役
   - 没焦点时按空格自动把 halo 落到 viewport 视觉中心最近的卡，并 pan 进舒适区（不进 edit，也不开 DetailPanel）

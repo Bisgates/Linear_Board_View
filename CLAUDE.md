@@ -55,7 +55,7 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 
 ## Development Mode (orchestrator / implementer / tester 三角)
 
-**主 agent 永远不直接写代码**，所有需求都派给 subagent。只有纯 docs / chore / 改 CLAUDE.md / 单文件配置这类零风险编辑可以在主仓库直接动；其他全部走 worktree。
+**主 agent 写代码的边界**：默认所有需求都派给 subagent；纯 docs / chore / 改 CLAUDE.md / 单文件配置这类零风险编辑直接动；**user 明确说"这个简单你直接改"或者改动本身机械到不值得 brief subagent**（例如改一个常量、调一个像素值、扩/缩一个判定阈值、改一行文案），主 agent 也直接在当前分支动 —— 改完跑一遍 `tsc --noEmit` + `cargo check` 就可以 commit。判断标准：能在一两个 Edit 内说清楚 + 不用做架构决策 = 直接改；否则派 implementer。
 
 ### 三个角色
 

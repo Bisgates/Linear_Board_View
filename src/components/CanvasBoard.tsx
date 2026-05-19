@@ -102,8 +102,19 @@ function decodeCardsEnvelope(text: string): ClipboardPayload | null {
 // drag-to-reparent. Colors derive from --warm-red (rgb 168,85,98) so they
 // stay on-palette. Replaces the v0.30 2px hard ring — should read as a
 // gentle glow, not a hard outline.
-const DROP_TARGET_GLOW =
-  "0 0 0 4px rgba(168, 85, 98, 0.18), 0 0 16px 4px rgba(168, 85, 98, 0.35)";
+// Two-layer outer glow keyed to the target card's accent color: a thin inner
+// halo at 0.22 alpha + a soft 16px bloom at 0.38 alpha. Falls back to the
+// warm-red for cards without a user-pickable color (e.g. Linear issues).
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return [168, 85, 98]; // warm-red
+  const n = parseInt(m[1]!, 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+function dropGlowFor(color: string | null | undefined): string {
+  const [r, g, b] = hexToRgb(color ?? "#a85562");
+  return `0 0 0 4px rgba(${r}, ${g}, ${b}, 0.22), 0 0 16px 4px rgba(${r}, ${g}, ${b}, 0.38)`;
+}
 const EDGE_TYPES: EdgeTypes = {
   labeled: LabeledEdge as unknown as EdgeTypes[string],
 };
@@ -530,6 +541,12 @@ function computeSnap(
 // card's center point. Returns null when the center is over empty canvas or
 // only over the dragged card itself. Used both for the live hover cue and
 // for the drop-time reparent decision.
+// Drag-to-reparent hit-test: the dragged card's center must fall inside the
+// target's INNER box (60% of bbox, centered) before we treat the target as a
+// reparent candidate — small enough that brushing past a neighbor doesn't fire
+// a phantom reparent, but big enough to be easy to hit visually.
+const DROP_HIT_RATIO = 0.6;
+
 function nodeAtCenterOf(
   dragId: string,
   dragPos: { x: number; y: number },
@@ -539,16 +556,16 @@ function nodeAtCenterOf(
 ): Node | null {
   const cx = dragPos.x + dragSize.w / 2;
   const cy = dragPos.y + dragSize.h / 2;
-  // Iterate in reverse so a card painted on top (later in the array) wins
-  // ties — matches what the user sees visually.
   for (let i = current.length - 1; i >= 0; i--) {
     const n = current[i]!;
     if (n.id === dragId) continue;
     if (excluded.has(n.id)) continue;
     const { w, h } = nodeSize(n);
-    const left = n.position.x;
-    const top = n.position.y;
-    if (cx >= left && cx <= left + w && cy >= top && cy <= top + h) {
+    const innerW = w * DROP_HIT_RATIO;
+    const innerH = h * DROP_HIT_RATIO;
+    const left = n.position.x + (w - innerW) / 2;
+    const top = n.position.y + (h - innerH) / 2;
+    if (cx >= left && cx <= left + innerW && cy >= top && cy <= top + innerH) {
       return n;
     }
   }
@@ -981,12 +998,16 @@ function BoardInner({
   const decoratedNodes = useMemo(() => {
     return nodes.map((n) => {
       const isDropTarget = dropTargetId !== null && n.id === dropTargetId;
+      const targetAccent =
+        isDropTarget && n.type === "note"
+          ? ((n.data as { color?: string } | undefined)?.color ?? DEFAULT_NOTE_COLOR)
+          : null;
       const withStyle = isDropTarget
         ? {
             ...n,
             style: {
               ...(n.style ?? {}),
-              boxShadow: DROP_TARGET_GLOW,
+              boxShadow: dropGlowFor(targetAccent),
               borderRadius: 10,
               transition: "box-shadow 0.15s ease-out",
             },
