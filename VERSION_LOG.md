@@ -2,6 +2,8 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.33.5 [2026-05-19 17:20] — WORKING ON 后缀宽度 140 → 100，原本留太多空白
+
 - v0.33.4 [2026-05-19 17:15] — pinned chip 拖排序换 pointer events 实现
   - HTML5 DnD 在 Tauri WebKit 上被 OS-level 文件拖入服务拦截不工作；改成 setPointerCapture + 4px threshold 自己实现拖动，单击仍 activate，超过阈值才进 drag
 

@@ -246,7 +246,7 @@ function ViewSwitcher({
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              width: 140,
+              width: 100,
               display: "inline-block",
             }}
           >
