@@ -2,6 +2,15 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.29.0 [2026-05-19 11:55] — iCloud Drive 自动备份 + 一堆 bug 修
+  - 每天 00:00/12:00/15:00/18:00/21:00 把整个 data 目录拷到 `~/Library/Mobile Documents/com~apple~CloudDocs/LinearBoardBackup/<时间戳>/`，保留最近 30 天；iCloud Drive 没开就静默跳过
+  - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建，顺序回到 [A,B,N,C]（之前 N 总掉到最末尾）
+  - ⌘V：剪贴板里有图片优先粘图片，没图片才粘内存里的卡片 buffer（之前粘卡片永远赢，截屏后 ⌘V 也是粘旧卡片）
+  - Esc：依次退连线模式 → 退编辑 → 清选中（halo + DetailPanel 一起清空），不再被 WebKit 默认行为捎带退出 app 全屏
+  - 方向键换 halo 时清空其他多选，不再把多张卡同时高亮成"全选"
+  - dropdown 里 × 删 view 真的能删，最后一个 view 删完会自动新建空白 view，操作完弹 toast
+  - 给 backupNow() Tauri 命令供 tester / 手动触发
+
 - v0.27.2 [2026-05-18 20:55] — F tidy 换成 slot-based 布局，浅叶子不再被深叶子兄弟挤同一行
   - 兄弟子树深浅不等时旧算法允许深叶子"溜"到浅叶子旁边，视觉上不像树
 

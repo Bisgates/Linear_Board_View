@@ -509,6 +509,26 @@ export default function App() {
     [cv],
   );
 
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const name = wov.manifest?.views.find((v) => v.id === id)?.name ?? id;
+      const wasLast = (wov.manifest?.views.length ?? 0) <= 1;
+      await wov.deleteView(id);
+      pushToast("success", wasLast ? `已删除 "${name}"，已新建空白 day view` : `已删除 day view "${name}"`);
+    },
+    [wov, pushToast],
+  );
+
+  const handleDeleteCustom = useCallback(
+    async (id: string) => {
+      const name = cv.manifest?.views.find((v) => v.id === id)?.name ?? id;
+      const wasLast = (cv.manifest?.views.length ?? 0) <= 1;
+      await cv.deleteView(id);
+      pushToast("success", wasLast ? `已删除 "${name}"，已新建空白 custom view` : `已删除 custom view "${name}"`);
+    },
+    [cv, pushToast],
+  );
+
   // Dropdown lists views newest-first (by createdAt). Manifest order on disk
   // stays insertion order — we sort only for display.
   const sortedViews = useMemo(() => {
@@ -562,7 +582,7 @@ export default function App() {
           onPick={handlePick}
           onCreate={handleCreate}
           onRename={wov.renameView}
-          onDelete={wov.deleteView}
+          onDelete={handleDelete}
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
           kind="day"
@@ -575,7 +595,7 @@ export default function App() {
           onPick={handlePickCustom}
           onCreate={handleCreateCustom}
           onRename={cv.renameView}
-          onDelete={cv.deleteView}
+          onDelete={handleDeleteCustom}
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
           kind="custom"

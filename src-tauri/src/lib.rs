@@ -20,6 +20,7 @@
 // missing — that matches the Vite dev plugin's behaviour and keeps the
 // frontend's load logic happy.
 
+mod backup;
 mod linear;
 
 use std::path::{Path, PathBuf};
@@ -526,6 +527,16 @@ async fn read_linear_api_key(app: AppHandle) -> AppResult<Option<String>> {
     }
 }
 
+// Manual one-shot backup, useful for tester-driven verification (no UI yet —
+// backups are scheduled automatically). Returns true if a snapshot was
+// written, false if iCloud Drive is unavailable on this machine.
+#[tauri::command]
+async fn backup_now(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || backup::run_backup_sync(&app))
+        .await
+        .map_err(|e| format!("join: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -551,6 +562,7 @@ pub fn run() {
             delete_custom_view_board,
             open_path,
             read_linear_api_key,
+            backup_now,
             linear::linear_fetch_all_issues,
             linear::linear_fetch_workflow_states,
             linear::linear_update_issue,
@@ -560,6 +572,10 @@ pub fn run() {
             // Pre-create app_data_dir/data so first-run writes don't race.
             let dir = data_root(&app.handle())?;
             std::fs::create_dir_all(&dir)?;
+            // Kick off the iCloud backup scheduler. No-op at runtime if
+            // iCloud Drive is disabled; harmless if backup target permission
+            // is denied (errors are logged + swallowed).
+            backup::spawn_scheduler(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

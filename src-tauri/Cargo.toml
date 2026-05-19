@@ -32,6 +32,10 @@ tauri-plugin-updater = "2"
 # `tauri-plugin-process` exposes the matching JS `relaunch()` we call after
 # install — without registering this plugin the frontend invoke would error.
 tauri-plugin-process = "2"
+# `libc` for local-time math in the iCloud backup scheduler (localtime_r /
+# mktime). Already in the transitive graph via tokio/reqwest; we re-declare
+# it here so backup.rs can use it directly.
+libc = "0.2"
 
 [dev-dependencies]
 # `examples/updater_smoke.rs` validates the signing chain (private key in

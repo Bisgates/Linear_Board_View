@@ -100,7 +100,11 @@ export function WorkingOnDropdown({
         {views.map((v) => {
           const isActive = v.id === activeId;
           const isEditing = editingId === v.id;
-          const canDelete = views.length > 1;
+          // Always allow delete: deleting the last view auto-creates a fresh
+          // blank one (see useViewsList.deleteView), so the user never lands
+          // in an empty-state UI.
+          const canDelete = true;
+          const isLastView = views.length === 1;
           return (
             <div
               key={v.id}
@@ -189,12 +193,13 @@ export function WorkingOnDropdown({
               {!isEditing && (
                 <button
                   type="button"
-                  disabled={!canDelete}
-                  title={canDelete ? "删除此 view" : "至少保留一个 view"}
+                  title={isLastView ? "删除此 view（最后一个 view 删除后会自动新建一个空白 view）" : "删除此 view"}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!canDelete) return;
-                    if (window.confirm(`删除 "${v.name}"？该 view 的位置与笔记将丢失。`)) {
+                    const msg = isLastView
+                      ? `删除 "${v.name}"？这是最后一个 view，删除后会自动新建一个空白 view。`
+                      : `删除 "${v.name}"？该 view 的位置与笔记将丢失。`;
+                    if (window.confirm(msg)) {
                       onDelete(v.id);
                     }
                   }}

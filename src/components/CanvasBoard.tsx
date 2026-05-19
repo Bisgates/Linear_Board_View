@@ -1332,9 +1332,13 @@ function BoardInner({
       if (evt.metaKey || evt.ctrlKey || evt.altKey) return;
       const editable = isEditable(evt.target) || isEditable(document.activeElement);
 
-      // Esc has two jobs: clear link mode first, then exit note-edit (keep halo).
+      // Esc cascade: link mode → note-edit → clear selection. preventDefault
+      // so WebKit doesn't intercept and exit the app's macOS fullscreen.
+      // Bails early if an unrelated text input has focus so its own escape
+      // (blur/cancel) keeps working.
       if (evt.key === "Escape") {
         if (linking.mode !== "off") {
+          evt.preventDefault();
           setLinking({ mode: "off" });
           return;
         }
@@ -1344,6 +1348,15 @@ function BoardInner({
           // focusedCardId untouched — halo stays on the card we just exited.
           return;
         }
+        if (editable) return; // some other input owns the Esc — leave it alone
+        // Clear selection: focused-card halo, ReactFlow's per-node `selected`
+        // flag, and the App-level DetailPanel selection.
+        evt.preventDefault();
+        setFocusedCardId(null);
+        setNodes((current) =>
+          current.map((n) => (n.selected ? { ...n, selected: false } : n)),
+        );
+        onSelectIssue?.(null);
         return;
       }
 
@@ -1451,6 +1464,10 @@ function BoardInner({
 
       // Arrow-key navigation — no preventDefault unless a target was found,
       // so unhandled arrows still bubble (e.g. before the user clicks anything).
+      // Clears every other ReactFlow selection first so any prior box-select /
+      // multi-select doesn't survive (otherwise the rebuild's preserve-selected
+      // branch would carry old halos forward and you'd end up with many cards
+      // glowing at once).
       const dir = ARROW_DIR[evt.key];
       if (dir) {
         const focusId = focusedCardIdRef.current;
@@ -1458,6 +1475,11 @@ function BoardInner({
         const next = findNeighbor(focusId, dir, getNodeGeos());
         if (next) {
           evt.preventDefault();
+          setNodes((current) =>
+            current.map((n) =>
+              n.selected && n.id !== next ? { ...n, selected: false } : n,
+            ),
+          );
           setFocusedCardId(next);
         }
         return;
@@ -1535,16 +1557,199 @@ function BoardInner({
     return () => window.removeEventListener("keydown", onKey);
   }, [linking.mode, undo, redo, getNodeGeos, insertCardWithLayout, onSelectIssue, focusNoteTextarea, reactFlow, setData, applyTidyMoves, ensureNodeVisible]);
 
+  // Shared image-paste handler. Both the ⌘V keydown branch (when the OS
+  // clipboard holds an image, in which case it wins over the in-memory
+  // cards buffer) and the native `paste` event (drag-drop / non-keyboard
+  // paste flows) funnel through here so the targeting + sizing logic stays
+  // in one place.
+  const pasteImageBlob = useCallback(
+    (blob: Blob) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result || "");
+        if (!src.startsWith("data:image/")) return;
+        const probe = new Image();
+        probe.onload = () => {
+          const nw = probe.naturalWidth || 256;
+          const nh = probe.naturalHeight || 192;
+
+          const editingId = editingNoteIdRef.current;
+          let targetId: string | null = null;
+          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
+            targetId = editingId;
+          } else {
+            const selectedNote = reactFlow.getNodes().find(
+              (n) => n.selected && n.type === "note",
+            );
+            if (selectedNote) targetId = selectedNote.id;
+          }
+
+          const TARGET_W = 280 - 8 - 24;
+          const w = Math.min(nw, TARGET_W);
+          const h = Math.max(1, Math.round((w / nw) * nh));
+          const newImg: NoteImage = { id: shortId("img"), src, w, h };
+
+          if (targetId) {
+            const id = targetId;
+            setData((prev) => ({
+              ...prev,
+              noteNodes: prev.noteNodes.map((n) => {
+                if (n.id !== id) return n;
+                const imgs = [...(n.images ?? []), newImg];
+                const prevSegs =
+                  Array.isArray(n.textSegments) &&
+                  n.textSegments.length === (n.images ?? []).length + 1
+                    ? n.textSegments
+                    : (n.images ?? []).length === 0
+                      ? [n.body ?? ""]
+                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
+                const nextSegs = [...prevSegs, ""];
+                return {
+                  ...n,
+                  images: imgs,
+                  textSegments: nextSegs,
+                  body: nextSegs.join("\n"),
+                };
+              }),
+            }));
+            return;
+          }
+
+          const rect = wrapperRef.current?.getBoundingClientRect();
+          const centerScreen = rect
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+          const center = reactFlow.screenToFlowPosition(centerScreen);
+          const id = shortId("n");
+          setData((prev) => ({
+            ...prev,
+            noteNodes: [
+              ...prev.noteNodes,
+              {
+                id,
+                body: "",
+                x: center.x,
+                y: center.y,
+                images: [newImg],
+                textSegments: ["", ""],
+                cardId: mintCardIdFor(prev.noteNodes),
+              },
+            ],
+          }));
+          setFocusedCardId(id);
+        };
+        probe.src = src;
+      };
+      reader.readAsDataURL(blob);
+    },
+    [reactFlow, setData],
+  );
+
   // ⌘C / ⌘V — clipboard copy/paste of selected cards + their internal edges.
   // Lives in a separate effect from the main board hotkeys so the modifier
   // early-return in there can stay simple. Only enabled when the App passes
   // clipboard state through (so the board never copies in isolation).
+  //
+  // ⌘V priority: if the OS clipboard currently holds an image, that wins
+  // over the in-memory cards buffer (so a fresh screenshot pastes as an
+  // image even after an older ⌘C left cards in the buffer). We probe via
+  // navigator.clipboard.read() — async, but the ⌘V keydown IS a user
+  // gesture so the permission check passes on macOS WKWebView. If the read
+  // fails (Tauri permission, older webview) we silently fall through to
+  // the cards branch so behavior degrades gracefully.
   useEffect(() => {
     if (!setClipboard) return;
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
       return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const pasteCardsBuffer = () => {
+      if (!clipboard || clipboard.items.length === 0) return false;
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      const centerScreen = rect
+        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      const center = reactFlow.screenToFlowPosition(centerScreen);
+
+      const localIdxToNewId: (string | null)[] = clipboard.items.map((it) => {
+        if (it.kind === "note") return shortId("n");
+        return it.id;
+      });
+
+      let skippedIssues = 0;
+      let addedIssues = 0;
+      let addedNotes = 0;
+
+      setData((prev) => {
+        const issueMembers = { ...prev.issueMembers };
+        const noteNodes = [...prev.noteNodes];
+        const existingNoteIds = new Set(noteNodes.map((n) => n.id));
+        const addedNodeIds = new Set<string>();
+
+        clipboard.items.forEach((it, idx) => {
+          const x = center.x + it.dx;
+          const y = center.y + it.dy;
+          if (it.kind === "issue") {
+            if (issueMembers[it.id]) {
+              skippedIssues += 1;
+              localIdxToNewId[idx] = null;
+              return;
+            }
+            issueMembers[it.id] = { x, y };
+            addedNodeIds.add(it.id);
+            addedIssues += 1;
+          } else {
+            let id = localIdxToNewId[idx];
+            if (!id || existingNoteIds.has(id)) {
+              id = shortId("n");
+              localIdxToNewId[idx] = id;
+            }
+            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
+              id,
+              body: it.body,
+              x,
+              y,
+              cardId: mintCardIdFor(noteNodes),
+            };
+            if (it.color) note.color = it.color;
+            if (it.working) note.working = true;
+            if (it.done) note.done = true;
+            noteNodes.push(note);
+            existingNoteIds.add(id);
+            addedNodeIds.add(id);
+            addedNotes += 1;
+          }
+        });
+
+        const newEdges: BoardEdge[] = [];
+        for (const e of clipboard.edges) {
+          const s = localIdxToNewId[e.sourceLocalIdx];
+          const t = localIdxToNewId[e.targetLocalIdx];
+          if (!s || !t) continue;
+          if (!addedNodeIds.has(s) || !addedNodeIds.has(t)) continue;
+          const out: BoardEdge = { id: shortId("e"), source: s, target: t };
+          if (e.label) out.label = e.label;
+          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
+          if (e.targetHandle) out.targetHandle = e.targetHandle;
+          newEdges.push(out);
+        }
+
+        return {
+          ...prev,
+          issueMembers,
+          noteNodes,
+          edges: [...prev.edges, ...newEdges],
+        };
+      });
+
+      const parts: string[] = [];
+      if (addedIssues) parts.push(`${addedIssues} issue`);
+      if (addedNotes) parts.push(`${addedNotes} note`);
+      const summary = parts.length ? parts.join(" + ") : "0 项";
+      const note = skippedIssues ? `（${skippedIssues} 个 issue 已存在跳过）` : "";
+      onClipboardToast?.(skippedIssues && !addedIssues && !addedNotes ? "info" : "success", `粘贴 ${summary}${note}`);
+      return true;
     };
     const onKey = (evt: KeyboardEvent) => {
       if (!(evt.metaKey || evt.ctrlKey)) return;
@@ -1605,107 +1810,41 @@ function BoardInner({
         return;
       }
 
-      // Paste branch
-      if (!clipboard || clipboard.items.length === 0) return;
+      // Paste branch — OS-clipboard image wins over in-memory cards buffer.
+      // preventDefault is unconditional so WebKit doesn't fire its own paste
+      // event into a focused input; we then probe the system clipboard async
+      // and route to image-paste or cards-paste.
       evt.preventDefault();
-      const rect = wrapperRef.current?.getBoundingClientRect();
-      const centerScreen = rect
-        ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-      const center = reactFlow.screenToFlowPosition(centerScreen);
-
-      // Pre-compute final ids per local index so edges can reference them.
-      // For issue items we reuse the original id; for note items we mint fresh.
-      const localIdxToNewId: (string | null)[] = clipboard.items.map((it) => {
-        if (it.kind === "note") return shortId("n");
-        return it.id;
-      });
-
-      let skippedIssues = 0;
-      let addedIssues = 0;
-      let addedNotes = 0;
-
-      setData((prev) => {
-        const issueMembers = { ...prev.issueMembers };
-        const noteNodes = [...prev.noteNodes];
-        const existingNoteIds = new Set(noteNodes.map((n) => n.id));
-        const addedNodeIds = new Set<string>();
-
-        clipboard.items.forEach((it, idx) => {
-          const x = center.x + it.dx;
-          const y = center.y + it.dy;
-          if (it.kind === "issue") {
-            if (issueMembers[it.id]) {
-              skippedIssues += 1;
-              localIdxToNewId[idx] = null;
-              return;
-            }
-            issueMembers[it.id] = { x, y };
-            addedNodeIds.add(it.id);
-            addedIssues += 1;
-          } else {
-            // Defensive — if the freshly minted id somehow collides, mint again.
-            let id = localIdxToNewId[idx];
-            if (!id || existingNoteIds.has(id)) {
-              id = shortId("n");
-              localIdxToNewId[idx] = id;
-            }
-            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
-              id,
-              body: it.body,
-              x,
-              y,
-              cardId: mintCardIdFor(noteNodes),
-            };
-            if (it.color) note.color = it.color;
-            if (it.working) note.working = true;
-            if (it.done) note.done = true;
-            noteNodes.push(note);
-            existingNoteIds.add(id);
-            addedNodeIds.add(id);
-            addedNotes += 1;
+      const tryOsImageThenCards = async () => {
+        let pastedImage = false;
+        try {
+          const items = await navigator.clipboard.read();
+          for (const item of items) {
+            const imgType = item.types.find((t) => t.startsWith("image/"));
+            if (!imgType) continue;
+            const blob = await item.getType(imgType);
+            pasteImageBlob(blob);
+            pastedImage = true;
+            break;
           }
-        });
-
-        const newEdges: BoardEdge[] = [];
-        for (const e of clipboard.edges) {
-          const s = localIdxToNewId[e.sourceLocalIdx];
-          const t = localIdxToNewId[e.targetLocalIdx];
-          if (!s || !t) continue;
-          if (!addedNodeIds.has(s) || !addedNodeIds.has(t)) continue;
-          const out: BoardEdge = { id: shortId("e"), source: s, target: t };
-          if (e.label) out.label = e.label;
-          if (e.sourceHandle) out.sourceHandle = e.sourceHandle;
-          if (e.targetHandle) out.targetHandle = e.targetHandle;
-          newEdges.push(out);
+        } catch {
+          // navigator.clipboard.read may reject (permission, missing API on
+          // older WKWebView, no user gesture). Swallow and fall back.
         }
-
-        return {
-          ...prev,
-          issueMembers,
-          noteNodes,
-          edges: [...prev.edges, ...newEdges],
-        };
-      });
-
-      const parts: string[] = [];
-      if (addedIssues) parts.push(`${addedIssues} issue`);
-      if (addedNotes) parts.push(`${addedNotes} note`);
-      const summary = parts.length ? parts.join(" + ") : "0 项";
-      const note = skippedIssues ? `（${skippedIssues} 个 issue 已存在跳过）` : "";
-      onClipboardToast?.(skippedIssues && !addedIssues && !addedNotes ? "info" : "success", `粘贴 ${summary}${note}`);
+        if (pastedImage) return;
+        pasteCardsBuffer();
+      };
+      void tryOsImageThenCards();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast]);
+  }, [clipboard, setClipboard, setData, reactFlow, onClipboardToast, pasteImageBlob]);
 
-  // Paste an image from the system clipboard. Target priority:
-  //   1. note currently being edited → append to it
-  //   2. the single selected note (if any) → append to it
-  //   3. otherwise → mint a fresh note at the viewport centre that wraps the
-  //      image (user pastes in empty space).
-  // preventDefault is called only when an image is found, so plain-text paste
-  // into a textarea still works.
+  // Paste an image from the system clipboard. Target priority lives in
+  // `pasteImageBlob`. This listener handles non-keyboard paste flows (the
+  // ⌘V keydown branch above intercepts the kbd path and probes the OS
+  // clipboard directly). preventDefault is called only when an image is
+  // found, so plain-text paste into a textarea still works.
   useEffect(() => {
     const onPaste = (evt: ClipboardEvent) => {
       const dt = evt.clipboardData;
@@ -1720,98 +1859,11 @@ function BoardInner({
       }
       if (!file) return;
       evt.preventDefault();
-
-      const reader = new FileReader();
-      reader.onload = () => {
-        const src = String(reader.result || "");
-        if (!src.startsWith("data:image/")) return;
-        // Probe natural dims so the embedded image keeps its real aspect ratio.
-        const probe = new Image();
-        probe.onload = () => {
-          const nw = probe.naturalWidth || 256;
-          const nh = probe.naturalHeight || 192;
-
-          const editingId = editingNoteIdRef.current;
-          let targetId: string | null = null;
-          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
-            targetId = editingId;
-          } else {
-            const selectedNote = reactFlow.getNodes().find(
-              (n) => n.selected && n.type === "note",
-            );
-            if (selectedNote) targetId = selectedNote.id;
-          }
-
-          // Card is fixed at 280; outer paddings eat 8px and the inner paper
-          // eats another 24px → 248 inner content width is the cap.
-          const TARGET_W = 280 - 8 - 24;
-          const w = Math.min(nw, TARGET_W);
-          const h = Math.max(1, Math.round((w / nw) * nh));
-          const newImg: NoteImage = { id: shortId("img"), src, w, h };
-
-          if (targetId) {
-            const id = targetId;
-            setData((prev) => ({
-              ...prev,
-              // Append the image at the end and grow textSegments by one
-              // empty slot so the new image sits between the previous
-              // trailing segment and a fresh empty textarea (user can type
-              // below it). Existing trailing segment text is preserved.
-              noteNodes: prev.noteNodes.map((n) => {
-                if (n.id !== id) return n;
-                const imgs = [...(n.images ?? []), newImg];
-                const prevSegs =
-                  Array.isArray(n.textSegments) &&
-                  n.textSegments.length === (n.images ?? []).length + 1
-                    ? n.textSegments
-                    : (n.images ?? []).length === 0
-                      ? [n.body ?? ""]
-                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
-                const nextSegs = [...prevSegs, ""];
-                return {
-                  ...n,
-                  images: imgs,
-                  textSegments: nextSegs,
-                  body: nextSegs.join("\n"),
-                };
-              }),
-            }));
-            return;
-          }
-
-          // Empty-space paste → new note at viewport centre. textSegments has
-          // two empty slots so the image is wrapped by a textarea above and
-          // below — both editable so the user can add text either side.
-          const rect = wrapperRef.current?.getBoundingClientRect();
-          const centerScreen = rect
-            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-          const center = reactFlow.screenToFlowPosition(centerScreen);
-          const id = shortId("n");
-          setData((prev) => ({
-            ...prev,
-            noteNodes: [
-              ...prev.noteNodes,
-              {
-                id,
-                body: "",
-                x: center.x,
-                y: center.y,
-                images: [newImg],
-                textSegments: ["", ""],
-                cardId: mintCardIdFor(prev.noteNodes),
-              },
-            ],
-          }));
-          setFocusedCardId(id);
-        };
-        probe.src = src;
-      };
-      reader.readAsDataURL(file);
+      pasteImageBlob(file);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [reactFlow, setData]);
+  }, [pasteImageBlob]);
 
   // Drag the entire group by grabbing the dashed frame's empty interior
   // (frame sits at zIndex -1 so cards still catch clicks on their own area).
