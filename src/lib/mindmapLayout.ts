@@ -182,10 +182,10 @@ export function computeChildPos(
  * it's treated as a root: a new same-column root is placed below it and
  * parentId is returned as null (caller skips adding an edge).
  *
- * Places the new sibling below ALL existing siblings (max sibling Y +
- * siblingDy), not just below the focused one. This matters because the
- * downstream tidy preserves children order by current Y — placing it below
- * everyone guarantees the new card lands last in the layout.
+ * Places the new sibling IMMEDIATELY AFTER `currentId` in y-order so the
+ * downstream tidy (which sorts siblings by current Y) sees the new card
+ * between current and the next sibling. If current is already the last
+ * sibling, falls back to "below current by siblingDy".
  *
  * Same dumb-insert philosophy as computeChildPos: no collision push-down.
  */
@@ -203,21 +203,29 @@ export function computeSiblingPos(
     .sort((a, b) => a.id.localeCompare(b.id));
   const parentId = incoming.length > 0 ? incoming[0]!.source : null;
 
-  // Lowest Y among siblings (children of parentId). Includes `current` itself.
-  // For a root (parentId === null), there is no parent to enumerate siblings
-  // from, so fall back to "below current".
-  let lowestY = current.y;
+  // Find the next sibling below `current` (smallest sib.y greater than current.y).
+  // For a root (parentId === null) there's no parent to enumerate siblings from,
+  // so we just place below current.
+  let nextSiblingY: number | null = null;
   if (parentId !== null) {
     for (const e of data.edges) {
       if (e.source !== parentId) continue;
+      if (e.target === currentId) continue;
       const sib = getNode(e.target, nodes);
       if (!sib) continue;
-      if (sib.y > lowestY) lowestY = sib.y;
+      if (sib.y <= current.y) continue;
+      if (nextSiblingY === null || sib.y < nextSiblingY) nextSiblingY = sib.y;
     }
   }
 
   const newX = current.x;
-  const newY = lowestY + config.siblingDy;
+  // If there's a next sibling, drop the new card at the midpoint so a
+  // sort-by-y put it in slot [current, NEW, next, ...]. Otherwise just step
+  // down by siblingDy as before.
+  const newY =
+    nextSiblingY !== null
+      ? (current.y + nextSiblingY) / 2
+      : current.y + config.siblingDy;
 
   return { parentId, x: newX, y: newY, shifts: [] };
 }

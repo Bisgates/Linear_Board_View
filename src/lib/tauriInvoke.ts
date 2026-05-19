@@ -81,6 +81,13 @@ export function openPath(path: string): Promise<void> {
   return invoke<void>("open_path", { path });
 }
 
+// --- iCloud backup — manual trigger. Returns true if a snapshot was written,
+// false if iCloud Drive is unavailable. The scheduled backup runs every
+// 12:00 / 15:00 / 18:00 / 21:00 / 00:00 local time without UI. ---
+export function backupNow(): Promise<boolean> {
+  return invoke<boolean>("backup_now");
+}
+
 // --- Day (Working On) views ---
 export function readDayManifest(): Promise<ViewsManifest> {
   return invoke<ViewsManifest>("read_day_manifest");
