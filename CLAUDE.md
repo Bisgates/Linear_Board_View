@@ -57,6 +57,8 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 
 **主 agent 写代码的边界**：默认所有需求都派给 subagent；纯 docs / chore / 改 CLAUDE.md / 单文件配置这类零风险编辑直接动；**user 明确说"这个简单你直接改"或者改动本身机械到不值得 brief subagent**（例如改一个常量、调一个像素值、扩/缩一个判定阈值、改一行文案），主 agent 也直接在当前分支动 —— 改完跑一遍 `tsc --noEmit` + `cargo check` 就可以 commit。判断标准：能在一两个 Edit 内说清楚 + 不用做架构决策 = 直接改；否则派 implementer。
 
+**纯文档改动 → 自动 commit + push（不用 user 确认）**：如果这次 `git diff --name-only` 里**只**有 `*.md` / `docs/*`（含截图替换）/ 单个配置文件 typo 这类没代码 side effect 的文件，主 agent 改完不跑 tsc/cargo check，**直接 commit 并 `git push` 到 main**。混了一行 `src/` 或 `src-tauri/src/` 下的代码改动就退回常规流程（要 user 验收后再 commit）。Pride Versioning 已规定纯 docs 不 bump 版本号，所以这条规则下的 push **不会 trigger `npm run release`**。commit message 用 `docs:` / `chore:` 前缀，不带 `vX.Y.Z`。
+
 ### 三个角色
 
 - **主 agent (orchestrator)**：常驻 user 主窗口。收需求 → 路由（见下）→ 派 implementer / tester subagent。**自己不动代码、不跑 dev、不开 PR 前不 push**。
