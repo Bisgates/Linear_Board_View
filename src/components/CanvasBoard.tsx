@@ -542,10 +542,10 @@ function computeSnap(
 // only over the dragged card itself. Used both for the live hover cue and
 // for the drop-time reparent decision.
 // Drag-to-reparent hit-test: the dragged card's center must fall inside the
-// target's INNER box (60% of bbox, centered) before we treat the target as a
-// reparent candidate — small enough that brushing past a neighbor doesn't fire
-// a phantom reparent, but big enough to be easy to hit visually.
-const DROP_HIT_RATIO = 0.6;
+// target's expanded box (120% of bbox, centered) before we treat the target as
+// a reparent candidate — slightly bigger than the visible card so users don't
+// have to land dead-center to trigger a reparent.
+const DROP_HIT_RATIO = 1.2;
 
 function nodeAtCenterOf(
   dragId: string,
