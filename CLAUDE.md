@@ -87,11 +87,22 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
 - tester 跑完一组任务后**不主动** `--reset-data`；要重置时再加 flag。
 - 因为 tester 是**串行单实例**，不存在多 dev app 抢同一 identifier 的并发问题。
 
-### 验收 → merge → 清理
+### 验收 → 聚合 dev → merge → 清理（默认走聚合路径）
 
-- tester 报告全绿 → 主 agent 通知 user "X 个 feature 待验收"。user 可自己 `open` 那个 dev app 视觉验收（identifier 一致，数据已就绪）。
-- user 明确 "ok / merge" 后 → 主 agent 进对应 worktree 开 PR / merge / 清 worktree。**user 没确认前绝不开 PR、不 push 远端**。
-- merge 后清理：`git worktree remove` + 删除该 worktree 对应 `pending/processing/done/failed` 里的归档文件（保留 `failed/` 里有诊断价值的留个一两周也行，定期清）。
+**多个 worktree 都 tester 全绿后，默认走"聚合 dev 一次性验收"**，不要让 user 一个 worktree 一个 worktree 单独 `open` 测。
+
+聚合步骤（主 agent 在主仓库执行，不进任何 worktree）：
+1. `git checkout main && git checkout -b agg-pending-review`（已存在就删了重建）。
+2. 按版本号升序顺序 `git merge --no-ff --no-edit worktree-agent-<id>` 把每个绿了的分支合进来。**VERSION_LOG.md 和 package.json 几乎必然冲突**：手动取所有 entry 按版本倒序排，`package.json` version 取最高那个。其他冲突要看具体 hunk 判断（一般同文件里两个 agent 改了不同段就 auto-merge 干净）。
+3. 聚合分支上跑 `npx tsc --noEmit -p tsconfig.app.json` + `cd src-tauri && cargo check --quiet` 双 check，任何 fail 都不要丢给 user。
+4. 直接在主仓库（不是 worktree）起 `npm run tauri:dev:shared`（**后台跑，会自动开窗口**，shared identifier 跟 user 主 app 物理隔离）。
+5. 通知 user："聚合 dev 起来了，请验这些点：…"，给一份**按 worktree 分组的简短测试清单**（每个 worktree 3-5 行人能记住的关键点，不是把 tester 的完整 assertion 列表复制过来）。也列出 tester 标了 `unable_to_self_test` 的项，这些必须 user 亲眼看。
+6. user 一句 "ok / merge" → 主 agent 在主仓库 `git checkout main && git merge --no-ff agg-pending-review`（fast-forward 或一个 merge commit 都行），然后 `git push`，**push 成功后自动 `npm run release`**（CLAUDE.md → Pride Versioning 已有这条规则；聚合 push 必然带版本号 bump）。
+7. 清理：`pkill -f "target/debug/linear-board"` 杀聚合 dev → `git branch -d agg-pending-review` → 每个 worktree `git worktree remove <path>` + `git branch -D worktree-agent-<id>` → `mv ~/.linear_board_test_queue/done/<那些>.md` 删掉。
+
+**user 没说 "ok / merge" 之前，绝不 merge 到 main、绝不 push、绝不 release。** 聚合 dev 是为了让 user 一次验完，不是默认通过的信号。
+
+退化路径（只 1 个 worktree 待验收）：直接 `cd <worktree> && npm run tauri:dev:shared` 起 dev，跳过聚合分支步骤。user ok 后该 worktree 直接 merge 进 main。
 
 ## Agent Self-Test (HARD RULE)
 - **凡是改了 user-visible 行为的功能/修 bug，必须 tester subagent 跑通端到端再说"done"**，不能把"麻烦你测一下"扔回给 user。Implementer 自己只做 typecheck/build smoke，不跑 Quartz E2E —— E2E 走 tester（见上面 Development Mode 三角）。仅当某个验证项物理上无法自动化（e.g. 主观视觉判断、外部服务联调）才回退到 user 手测，tester 在报告里明确标"X 我测了，Y 没法自动测，请你看一下"。
