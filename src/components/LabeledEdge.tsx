@@ -16,6 +16,13 @@ interface LabeledEdgeData {
   onEditEnd?: () => void;
   /** Border radius for path corners (defaults to 10) */
   borderRadius?: number;
+  /**
+   * Growth direction of the tree this edge belongs to. Determines which
+   * edge of the parent the stem leaves from and which edge of the child
+   * it enters. Missing / "right" = legacy horizontal (parent right →
+   * child left).
+   */
+  direction?: "right" | "left" | "up" | "down";
 }
 
 /**
@@ -31,7 +38,13 @@ interface LabeledEdgeData {
  */
 const STEM_OFFSET = 64;
 
-function getEdgeParams(source: InternalNode, target: InternalNode) {
+type EdgeDir = "right" | "left" | "up" | "down";
+
+function getEdgeParams(
+  source: InternalNode,
+  target: InternalNode,
+  dir: EdgeDir,
+) {
   const sw = source.measured?.width ?? 280;
   const sh = source.measured?.height ?? 120;
   const tw = target.measured?.width ?? 280;
@@ -41,52 +54,89 @@ function getEdgeParams(source: InternalNode, target: InternalNode) {
   const tpx = target.internals.positionAbsolute.x;
   const tpy = target.internals.positionAbsolute.y;
 
+  const scx = spx + sw / 2;
   const scy = spy + sh / 2;
+  const tcx = tpx + tw / 2;
   const tcy = tpy + th / 2;
 
-  // Mindmap orientation is left → right: the parent always sits to the LEFT
-  // of its children. Always emit Right→Left, even when a child sits well
-  // above or below the parent. The previous "dominant-axis" pick would flip
-  // to Bottom/Top routing once a sibling drifted past the 45° cone — that's
-  // what produced the chaotic mix of right-side AND bottom-side edges
-  // leaving the same parent (see image #7 vs the clean stem in image #8).
-  //
-  // For the rare reverse case (target left of source — manually drawn
-  // back-edges), flip to Left→Right so the routing stays sensible.
-  const targetIsRight = tpx + tw / 2 >= spx + sw / 2;
-  if (targetIsRight) {
-    const sx = spx + sw;
+  // Mindmap orientation is along the tree's direction: the parent always
+  // sits behind its children along the primary axis. Pick the exit / entry
+  // edges accordingly. For the rare reverse case (target ends up on the
+  // opposite side of the source — e.g. a manually-drawn back-edge), flip
+  // the routing so the path stays sensible.
+  if (dir === "right" || dir === "left") {
+    const targetIsRight = tcx >= scx;
+    const forward = dir === "right" ? targetIsRight : !targetIsRight;
+    if (forward) {
+      // Forward horizontal: source side → target opposite side.
+      const sx = dir === "right" ? spx + sw : spx; // right edge or left edge
+      const sy = scy;
+      const tx = dir === "right" ? tpx : tpx + tw;
+      const ty = tcy;
+      const centerX = dir === "right" ? sx + STEM_OFFSET : sx - STEM_OFFSET;
+      return {
+        sx,
+        sy,
+        tx,
+        ty,
+        sourcePos: dir === "right" ? Position.Right : Position.Left,
+        targetPos: dir === "right" ? Position.Left : Position.Right,
+        centerX,
+        centerY: undefined,
+      };
+    }
+    // Back-edge: flip sides.
+    const sx = dir === "right" ? spx : spx + sw;
     const sy = scy;
-    const tx = tpx;
+    const tx = dir === "right" ? tpx + tw : tpx;
     const ty = tcy;
-    // centerX = the shared bend column. With every edge from the same source
-    // using the same centerX, getSmoothStepPath draws each one's first leg
-    // along the SAME vertical line — they visually merge into one stem.
-    const centerX = sx + STEM_OFFSET;
+    const centerX = dir === "right" ? sx - STEM_OFFSET : sx + STEM_OFFSET;
     return {
       sx,
       sy,
       tx,
       ty,
-      sourcePos: Position.Right,
-      targetPos: Position.Left,
+      sourcePos: dir === "right" ? Position.Left : Position.Right,
+      targetPos: dir === "right" ? Position.Right : Position.Left,
       centerX,
+      centerY: undefined,
     };
   }
-  // target is to the left → flipped (back-edge / cross-link)
-  const sx = spx;
-  const sy = scy;
-  const tx = tpx + tw;
-  const ty = tcy;
-  const centerX = sx - STEM_OFFSET;
+  // Vertical tree (up / down).
+  const targetIsBelow = tcy >= scy;
+  const forward = dir === "down" ? targetIsBelow : !targetIsBelow;
+  if (forward) {
+    const sx = scx;
+    const sy = dir === "down" ? spy + sh : spy; // bottom or top edge
+    const tx = tcx;
+    const ty = dir === "down" ? tpy : tpy + th;
+    const centerY = dir === "down" ? sy + STEM_OFFSET : sy - STEM_OFFSET;
+    return {
+      sx,
+      sy,
+      tx,
+      ty,
+      sourcePos: dir === "down" ? Position.Bottom : Position.Top,
+      targetPos: dir === "down" ? Position.Top : Position.Bottom,
+      centerX: undefined,
+      centerY,
+    };
+  }
+  // Back-edge for a vertical tree.
+  const sx = scx;
+  const sy = dir === "down" ? spy : spy + sh;
+  const tx = tcx;
+  const ty = dir === "down" ? tpy + th : tpy;
+  const centerY = dir === "down" ? sy - STEM_OFFSET : sy + STEM_OFFSET;
   return {
     sx,
     sy,
     tx,
     ty,
-    sourcePos: Position.Left,
-    targetPos: Position.Right,
-    centerX,
+    sourcePos: dir === "down" ? Position.Top : Position.Bottom,
+    targetPos: dir === "down" ? Position.Bottom : Position.Top,
+    centerX: undefined,
+    centerY,
   };
 }
 
@@ -105,8 +155,10 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let sourcePos = props.sourcePosition;
   let targetPos = props.targetPosition;
   let centerX: number | undefined;
+  let centerY: number | undefined;
+  const dir: EdgeDir = (data.direction as EdgeDir | undefined) ?? "right";
   if (sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
-    const p = getEdgeParams(sourceNode, targetNode);
+    const p = getEdgeParams(sourceNode, targetNode, dir);
     sx = p.sx;
     sy = p.sy;
     tx = p.tx;
@@ -114,6 +166,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
     sourcePos = p.sourcePos;
     targetPos = p.targetPos;
     centerX = p.centerX;
+    centerY = p.centerY;
   }
 
   // borderRadius softens the corners; the default 10 looks "cared for" — the
@@ -131,6 +184,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
     targetPosition: targetPos,
     borderRadius: data.borderRadius ?? 10,
     centerX,
+    centerY,
   });
 
   const externalEditing = Boolean(data.editing);
