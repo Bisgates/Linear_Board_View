@@ -20,7 +20,9 @@ import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
 import { useAllIssuesBoardState, useBoardState } from "./lib/useBoardState";
 import { useCustomViews, useWorkingOnViews } from "./lib/useWorkingOnViews";
+import { usePinnedTabs } from "./lib/usePinnedTabs";
 import { useAgentSessions } from "./lib/useAgentSessions";
+import { PinnedTabsStrip, type PinnedTabEntry } from "./components/PinnedTabsStrip";
 import { AgentCardProvider } from "./lib/agentCardContext";
 import { findNextSlotNear, type NoteNode } from "./lib/workingOn";
 import { generateCardId } from "./lib/cardId";
@@ -521,6 +523,78 @@ export default function App() {
     return [...cv.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [cv.manifest]);
 
+  const customViewIds = useMemo(
+    () => cv.manifest?.views.map((v) => v.id) ?? [],
+    [cv.manifest],
+  );
+  const pinned = usePinnedTabs(customViewIds);
+
+  const pinnedTabEntries = useMemo<PinnedTabEntry[]>(() => {
+    if (!cv.manifest) return [];
+    const byId = new Map(cv.manifest.views.map((v) => [v.id, v]));
+    const out: PinnedTabEntry[] = [];
+    for (const id of pinned.order) {
+      const meta = byId.get(id);
+      if (meta) out.push({ viewId: id, name: meta.name });
+    }
+    return out;
+  }, [cv.manifest, pinned.order]);
+
+  const pinnedIdSet = useMemo(() => new Set(pinned.order), [pinned.order]);
+
+  const handleActivatePinned = useCallback(
+    (viewId: string) => {
+      cv.setActiveId(viewId);
+      setActiveView("custom");
+    },
+    [cv],
+  );
+
+  // Global keyboard shortcuts for view switching. Single-letter, no modifier.
+  // CanvasBoard owns F/U/G/C/Tab/Space/arrows; a/s/d/1-9 are free.
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
+    const onKey = (evt: KeyboardEvent) => {
+      if (evt.defaultPrevented) return;
+      if (evt.metaKey || evt.ctrlKey || evt.altKey || evt.shiftKey) return;
+      if (shortcutsOpen || dropdownAnchor) return;
+      if (isEditable(evt.target) || isEditable(document.activeElement)) return;
+
+      const k = evt.key;
+      if (k === "a" || k === "A") {
+        setActiveView("agent_tmp");
+        return;
+      }
+      if (k === "s" || k === "S") {
+        setActiveView("all");
+        return;
+      }
+      if (k === "d" || k === "D") {
+        const latest =
+          wov.manifest && wov.manifest.views.length > 0
+            ? [...wov.manifest.views].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+            : null;
+        if (latest) wov.setActiveId(latest.id);
+        setActiveView("working_on");
+        return;
+      }
+      if (/^[1-9]$/.test(k)) {
+        const idx = parseInt(k, 10) - 1;
+        const entry = pinnedTabEntries[idx];
+        if (!entry) return;
+        cv.setActiveId(entry.viewId);
+        setActiveView("custom");
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shortcutsOpen, dropdownAnchor, wov, cv, pinnedTabEntries]);
+
   return (
     <div
       style={{
@@ -554,6 +628,14 @@ export default function App() {
             <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
           ) : null
         }
+        centerSlot={
+          <PinnedTabsStrip
+            tabs={pinnedTabEntries}
+            activeViewId={activeView === "custom" ? cv.activeId : null}
+            onActivate={handleActivatePinned}
+            onReorder={pinned.reorder}
+          />
+        }
       />
       {dropdownAnchor?.kind === "day" && wov.manifest && (
         <WorkingOnDropdown
@@ -579,6 +661,9 @@ export default function App() {
           onClose={() => setDropdownAnchor(null)}
           anchor={dropdownAnchor}
           kind="custom"
+          pinnedIds={pinnedIdSet}
+          onPin={pinned.pin}
+          onUnpin={pinned.unpin}
         />
       )}
       <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
