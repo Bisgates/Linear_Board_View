@@ -2,6 +2,8 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.33.3 [2026-05-19 17:05] — issue count 固定宽度，0/1/N 切换不再带着中部 chip 抖动
+
 - v0.33.2 [2026-05-19 17:00] — 顶栏 tab 不再随 d / 1-9 切 view 抖动 + pinned chip 拖排序修复
   - WORKING ON / CUSTOM 后缀从 maxWidth → 固定 width，按钮外宽锁定；AGENT_TMP 和 ☰ 钉死在右边不再左右滑
   - PinnedTabsStrip 拖动逻辑用 ref 镜像 dragIdx，React 异步 state 批处理引起的"首个 dragover 没 preventDefault" race 修了，chip 现在真的能拖换位

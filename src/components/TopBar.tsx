@@ -84,12 +84,19 @@ export function TopBar({
         >
           Linear Board
         </span>
+        {/* Fixed width so the count's digit/plural changes don't shift the
+            centerSlot (pinned chip strip) left edge as issues update. */}
         <span
           style={{
             fontSize: 11,
             color: "var(--muted)",
             letterSpacing: "0.12em",
             textTransform: "uppercase",
+            width: 110,
+            display: "inline-block",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
           }}
         >
           {totalCount !== undefined && totalCount !== issueCount
