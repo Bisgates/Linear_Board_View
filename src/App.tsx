@@ -29,7 +29,6 @@ import { generateCardId } from "./lib/cardId";
 import { computeInitialLayout } from "./lib/layout";
 import type { IssueRecord } from "./linear/types";
 import type { IssuePatch } from "./linear/updateIssue";
-import type { ClipboardPayload } from "./lib/clipboard";
 
 let toastSeq = 0;
 
@@ -81,7 +80,6 @@ export default function App() {
     | { kind: "day" | "custom"; x: number; y: number; width: number }
     | null
   >(null);
-  const [clipboard, setClipboard] = useState<ClipboardPayload | null>(null);
   const workingOnBoardRef = useRef<CanvasBoardHandle | null>(null);
   const allIssuesBoardRef = useRef<CanvasBoardHandle | null>(null);
   const customBoardRef = useRef<CanvasBoardHandle | null>(null);
@@ -750,8 +748,6 @@ export default function App() {
                 issueNodeType="agentIssue"
                 onSelectIssue={setSelectedId}
                 selectedIssueId={selectedId}
-                clipboard={clipboard}
-                setClipboard={setClipboard}
                 onClipboardToast={pushToast}
               />
             </AgentCardProvider>
@@ -769,8 +765,6 @@ export default function App() {
               loadingLabel="loading all_issues_board…"
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           ) : activeView === "custom" ? (
@@ -786,8 +780,6 @@ export default function App() {
               loadingLabel={`loading ${customViewName ?? "custom"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           ) : (
@@ -803,8 +795,6 @@ export default function App() {
               loadingLabel={`loading ${activeViewName ?? "working_on"}…`}
               onSelectIssue={setSelectedId}
               selectedIssueId={selectedId}
-              clipboard={clipboard}
-              setClipboard={setClipboard}
               onClipboardToast={pushToast}
             />
           )}
