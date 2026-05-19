@@ -28,6 +28,10 @@ const SHORTCUTS: ShortcutRow[] = [
   { keys: ["drag empty pane"], scope: "All views", desc: "Box select — touch is enough, no need to fully cover" },
   { keys: ["two-finger scroll"], scope: "All views", desc: "Pan the canvas" },
   { keys: ["pinch"], scope: "All views", desc: "Zoom in / out" },
+  { keys: ["A"], scope: "View switch", desc: "Switch to Agent_tmp" },
+  { keys: ["S"], scope: "View switch", desc: "Switch to All Issues" },
+  { keys: ["D"], scope: "View switch", desc: "Switch to latest Working On day view" },
+  { keys: ["1 - 9"], scope: "View switch", desc: "Activate the Nth pinned custom view (right-click a Custom dropdown row to pin)" },
 ];
 
 interface Props {

@@ -17,6 +17,18 @@ interface Props {
    * Custom views are free-form.
    */
   kind?: "day" | "custom";
+  /** Custom-only: which view ids are already pinned (drives Pin/Unpin label). */
+  pinnedIds?: Set<string>;
+  /** Custom-only: pin a custom view to the top-bar strip. */
+  onPin?: (id: string) => void;
+  /** Custom-only: unpin a custom view from the top-bar strip. */
+  onUnpin?: (id: string) => void;
+}
+
+interface ContextMenuState {
+  viewId: string;
+  x: number;
+  y: number;
 }
 
 export function WorkingOnDropdown({
@@ -29,13 +41,19 @@ export function WorkingOnDropdown({
   onClose,
   anchor,
   kind = "day",
+  pinnedIds,
+  onPin,
+  onUnpin,
 }: Props) {
   const allowRename = kind === "custom";
+  const allowPin = kind === "custom" && !!onPin && !!onUnpin;
   const createLabel = kind === "custom" ? "+ 新建 custom view" : "+ 新建 day view";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -44,25 +62,37 @@ export function WorkingOnDropdown({
     }
   }, [editingId]);
 
-  // Click outside → close.
+  // Click outside → close. If a context menu is open, the first outside click
+  // dismisses just the menu (matches platform context-menu conventions).
   useEffect(() => {
     const onDocDown = (evt: MouseEvent) => {
+      const target = evt.target as Node;
+      if (contextMenu && ctxMenuRef.current && ctxMenuRef.current.contains(target)) return;
+      if (contextMenu) {
+        setContextMenu(null);
+        return;
+      }
       if (!rootRef.current) return;
-      if (rootRef.current.contains(evt.target as Node)) return;
+      if (rootRef.current.contains(target)) return;
       onClose();
     };
     document.addEventListener("mousedown", onDocDown);
     return () => document.removeEventListener("mousedown", onDocDown);
-  }, [onClose]);
+  }, [onClose, contextMenu]);
 
-  // Esc → close.
+  // Esc → dismiss context menu first, otherwise close dropdown.
   useEffect(() => {
     const onKey = (evt: KeyboardEvent) => {
-      if (evt.key === "Escape") onClose();
+      if (evt.key !== "Escape") return;
+      if (contextMenu) {
+        setContextMenu(null);
+        return;
+      }
+      onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, contextMenu]);
 
   const commit = (id: string) => {
     const trimmed = draft.trim();
@@ -115,6 +145,12 @@ export function WorkingOnDropdown({
                 evt.stopPropagation();
                 setEditingId(v.id);
                 setDraft(v.name);
+              }}
+              onContextMenu={(evt) => {
+                if (!allowPin) return;
+                evt.preventDefault();
+                evt.stopPropagation();
+                setContextMenu({ viewId: v.id, x: evt.clientX, y: evt.clientY });
               }}
               style={{
                 display: "flex",
@@ -254,6 +290,59 @@ export function WorkingOnDropdown({
       >
         {createLabel}
       </button>
+      {contextMenu && allowPin && (
+        <div
+          ref={ctxMenuRef}
+          role="menu"
+          style={{
+            position: "fixed",
+            top: contextMenu.y,
+            left: contextMenu.x,
+            background: "var(--paper)",
+            border: "1px solid var(--hairline)",
+            borderRadius: 6,
+            boxShadow: "0 8px 24px rgba(26,24,20,0.18)",
+            zIndex: 101,
+            fontFamily: "var(--sans)",
+            fontSize: 12,
+            color: "var(--ink)",
+            overflow: "hidden",
+            minWidth: 140,
+          }}
+        >
+          {(() => {
+            const isAlreadyPinned = !!pinnedIds?.has(contextMenu.viewId);
+            const label = isAlreadyPinned ? "Unpin board" : "Pin board";
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isAlreadyPinned) onUnpin?.(contextMenu.viewId);
+                  else onPin?.(contextMenu.viewId);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 12px",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--ink)",
+                  fontFamily: "var(--sans)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  letterSpacing: "0.02em",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-soft)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                {label}
+              </button>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }

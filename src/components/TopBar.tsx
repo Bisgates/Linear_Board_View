@@ -23,6 +23,8 @@ interface TopBarProps {
   /** Double-click on the Custom tab commits a new name for the active custom view. */
   onRenameActiveCustom?: (name: string) => void;
   leftSlot?: React.ReactNode;
+  /** Sits between the left cluster and the right ViewSwitcher group. */
+  centerSlot?: React.ReactNode;
   // Updater entry surfaced inside the hamburger menu (Tauri runtime only).
   showCheckUpdate?: boolean;
   checkUpdateBusy?: boolean;
@@ -44,6 +46,7 @@ export function TopBar({
   onCustomExpand,
   onRenameActiveCustom,
   leftSlot,
+  centerSlot,
   showCheckUpdate,
   checkUpdateBusy,
   onCheckUpdate,
@@ -87,6 +90,20 @@ export function TopBar({
             ? `${issueCount} / ${totalCount} issues`
             : `${issueCount} issue${issueCount === 1 ? "" : "s"}`}
         </span>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          paddingLeft: 24,
+          paddingRight: 24,
+          minWidth: 0,
+          overflow: "hidden",
+        }}
+      >
+        {centerSlot}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <ViewSwitcher
