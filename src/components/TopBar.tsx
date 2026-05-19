@@ -226,23 +226,25 @@ function ViewSwitcher({
           }}
         >
           <span>Working On</span>
-          {workingOnLabel && (
-            <span
-              style={{
-                fontWeight: 400,
-                opacity: 0.7,
-                textTransform: "none",
-                letterSpacing: 0,
-                fontSize: 10,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                maxWidth: 200,
-              }}
-            >
-              · {workingOnLabel}
-            </span>
-          )}
+          {/* Suffix has a FIXED width (not maxWidth) so swapping the active
+              day-view via `d` / dropdown doesn't change the tab's outer
+              width — the rest of the bar stops sliding around. */}
+          <span
+            style={{
+              fontWeight: 400,
+              opacity: 0.7,
+              textTransform: "none",
+              letterSpacing: 0,
+              fontSize: 10,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              width: 140,
+              display: "inline-block",
+            }}
+          >
+            {workingOnLabel ? `· ${workingOnLabel}` : ""}
+          </span>
         </button>
         <button
           aria-label="切换 Working On view"
@@ -342,23 +344,22 @@ function ViewSwitcher({
               />
             </span>
           ) : (
-            customLabel && (
-              <span
-                style={{
-                  fontWeight: 400,
-                  opacity: 0.7,
-                  textTransform: "none",
-                  letterSpacing: 0,
-                  fontSize: 10,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  maxWidth: 200,
-                }}
-              >
-                · {customLabel}
-              </span>
-            )
+            <span
+              style={{
+                fontWeight: 400,
+                opacity: 0.7,
+                textTransform: "none",
+                letterSpacing: 0,
+                fontSize: 10,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                width: 100,
+                display: "inline-block",
+              }}
+            >
+              {customLabel ? `· ${customLabel}` : ""}
+            </span>
           )}
         </button>
         <button

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export interface PinnedTabEntry {
   viewId: string;
@@ -20,15 +20,22 @@ interface DropTarget {
 export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: Props) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  // Ref-mirrored drag origin: React state updates batch, so a fast first
+  // dragover fired right after dragstart may read the pre-set null. The ref
+  // is set synchronously in dragstart and is the source of truth for
+  // gating dragover / drop logic. The state is just for visuals.
+  const dragIdxRef = useRef<number | null>(null);
 
   if (tabs.length === 0) return null;
 
   const finalizeDrop = (overIdx: number, side: "left" | "right") => {
-    if (dragIdx === null) return;
+    const from = dragIdxRef.current;
+    if (from === null) return;
     const insertIdx = side === "right" ? overIdx + 1 : overIdx;
-    if (insertIdx !== dragIdx && insertIdx !== dragIdx + 1) {
-      onReorder(dragIdx, insertIdx);
+    if (insertIdx !== from && insertIdx !== from + 1) {
+      onReorder(from, insertIdx);
     }
+    dragIdxRef.current = null;
     setDragIdx(null);
     setDropTarget(null);
   };
@@ -59,6 +66,7 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
             aria-selected={isActive}
             draggable
             onDragStart={(e) => {
+              dragIdxRef.current = idx;
               setDragIdx(idx);
               e.dataTransfer.effectAllowed = "move";
               try {
@@ -67,8 +75,11 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
                 // setData can fail in some niche cases (e.g. SSR shim); harmless.
               }
             }}
+            // dragover must ALWAYS preventDefault on a valid drop zone — without
+            // it the browser refuses the drop. Even if our drag-origin ref isn't
+            // set yet (cross-element drag from outside), we still claim the zone.
             onDragOver={(e) => {
-              if (dragIdx === null) return;
+              if (dragIdxRef.current === null) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
               const rect = e.currentTarget.getBoundingClientRect();
@@ -84,7 +95,7 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
               if (dropTarget?.index === idx) setDropTarget(null);
             }}
             onDrop={(e) => {
-              if (dragIdx === null) return;
+              if (dragIdxRef.current === null) return;
               e.preventDefault();
               const rect = e.currentTarget.getBoundingClientRect();
               const mid = rect.left + rect.width / 2;
@@ -92,9 +103,13 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
               finalizeDrop(idx, side);
             }}
             onDragEnd={() => {
+              dragIdxRef.current = null;
               setDragIdx(null);
               setDropTarget(null);
             }}
+            // Native button click fires on mouseup *only when no drag occurred* —
+            // i.e. plain click activates, drag-then-release reorders. So a single
+            // onClick is safe here, no extra guard needed.
             onClick={() => onActivate(tab.viewId)}
             title={`Custom · ${tab.name}  (press ${idx + 1})`}
             style={{
