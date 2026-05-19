@@ -15,6 +15,13 @@ export interface MenuItem {
   tone?: "default" | "danger";
   /** Optional disabled state — row stays visible but unclickable + dimmed. */
   disabled?: boolean;
+  /** Renders a leading checkmark glyph. Used for radio-style groups (e.g. the
+   *  root-direction picker on a mindmap root). */
+  checked?: boolean;
+  /** Render a thin top-divider before this row. Used to group radio-style
+   *  options (e.g. Direction: Right / Left / Up / Down) below the regular
+   *  actions, so the menu still reads as a single ordered list. */
+  separatorAbove?: boolean;
 }
 
 interface Props {
@@ -77,7 +84,7 @@ export function BoardContextMenu({ x, y, items, onDismiss }: Props) {
         const danger = item.tone === "danger";
         const baseColor = danger ? "var(--warm-red)" : "var(--ink)";
         const hoverBg = danger ? "rgba(178,58,72,0.08)" : "rgba(26,24,20,0.06)";
-        return (
+        const row = (
           <button
             key={item.id}
             disabled={item.disabled}
@@ -105,6 +112,9 @@ export function BoardContextMenu({ x, y, items, onDismiss }: Props) {
               borderRadius: 4,
               opacity: item.disabled ? 0.6 : 1,
               transition: "background 0.08s",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
             }}
             onMouseEnter={(e) => {
               if (item.disabled) return;
@@ -114,9 +124,40 @@ export function BoardContextMenu({ x, y, items, onDismiss }: Props) {
               (e.currentTarget as HTMLButtonElement).style.background = "transparent";
             }}
           >
-            {item.label}
+            <span
+              aria-hidden="true"
+              style={{
+                display: "inline-block",
+                width: 12,
+                textAlign: "center",
+                color: "var(--ink)",
+                opacity: item.checked ? 1 : 0,
+                fontWeight: 700,
+              }}
+            >
+              {/* leading checkmark slot — empty width is reserved so all rows
+                  in the same menu align text regardless of checked state */}
+              ✓
+            </span>
+            <span style={{ flex: 1 }}>{item.label}</span>
           </button>
         );
+        if (item.separatorAbove) {
+          return (
+            <div key={`${item.id}-wrap`}>
+              <div
+                style={{
+                  height: 1,
+                  margin: "4px 8px",
+                  background: "var(--hairline)",
+                  opacity: 0.7,
+                }}
+              />
+              {row}
+            </div>
+          );
+        }
+        return row;
       })}
     </div>
   );

@@ -28,7 +28,7 @@ import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { BoardData, BoardEdge, GroupBox, NoteImage } from "../lib/workingOn";
+import type { BoardData, BoardEdge, GroupBox, NoteImage, RootDirection } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
 import { generateCardId } from "../lib/cardId";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
@@ -39,6 +39,7 @@ import {
   computeSiblingPos,
   findAllRoots,
   findNeighbor,
+  findRoot,
   tidyAllRoots,
   tidySubtree,
   type Direction,
@@ -592,6 +593,17 @@ function collectDescendants(rootId: string, edges: ReadonlyArray<BoardEdge>): Se
 }
 
 function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
+  // Memoize the per-source direction lookup so a board with hundreds of
+  // edges sharing one root doesn't climb the incoming chain N times.
+  const dirCache = new Map<string, RootDirection>();
+  const lookupDir = (sourceId: string): RootDirection => {
+    const hit = dirCache.get(sourceId);
+    if (hit !== undefined) return hit;
+    const root = findRoot(sourceId, data.edges);
+    const d = data.rootDirections?.[root] ?? "right";
+    dirCache.set(sourceId, d);
+    return d;
+  };
   return data.edges.map((e) => ({
     id: e.id,
     source: e.source,
@@ -613,6 +625,7 @@ function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
       label: e.label ?? "",
       editing: editingEdgeId === e.id,
       borderRadius: 10,
+      direction: lookupDir(e.source),
     } as Record<string, unknown>,
   }));
 }
@@ -1309,6 +1322,7 @@ function BoardInner({
                 geoFn(),
                 dataRef.current.edges,
                 DEFAULT_TIDY_CONFIG,
+                dataRef.current.rootDirections,
               );
               if (moves.length > 0) applyFn(moves);
             });
@@ -1748,11 +1762,22 @@ function BoardInner({
             onClipboardToast?.("info", "请先选中一张卡片，再按 Shift+F 整理它所在的子树（或 F 整理全画布）");
             return;
           }
-          const moves = tidySubtree(focusId, geos, edges, DEFAULT_TIDY_CONFIG);
+          const moves = tidySubtree(
+            focusId,
+            geos,
+            edges,
+            DEFAULT_TIDY_CONFIG,
+            dataRef.current.rootDirections,
+          );
           if (moves.length > 0) applyTidyMoves(moves);
           console.log(`[canvas-board] → tidy SUBTREE from ${focusId}: ${moves.length} moves (this card stays pinned, descendants reflow)`);
         } else {
-          const moves = tidyAllRoots(geos, edges, DEFAULT_TIDY_CONFIG);
+          const moves = tidyAllRoots(
+            geos,
+            edges,
+            DEFAULT_TIDY_CONFIG,
+            dataRef.current.rootDirections,
+          );
           if (moves.length > 0) applyTidyMoves(moves);
           console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots`);
         }
@@ -1873,7 +1898,13 @@ function BoardInner({
         let newId: string | null = null;
         let placement: { x: number; y: number } | null = null;
         if (evt.shiftKey) {
-          const p = computeSiblingPos(focusId, dataRef.current, geos);
+          const p = computeSiblingPos(
+            focusId,
+            dataRef.current,
+            geos,
+            DEFAULT_LAYOUT_CONFIG,
+            dataRef.current.rootDirections,
+          );
           if (!p) return;
           placement = { x: p.x, y: p.y };
           const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
@@ -1884,7 +1915,13 @@ function BoardInner({
           // measured the new card.
           newId = insertCardWithLayout(p, p.parentId, color, focusId);
         } else {
-          const p = computeChildPos(focusId, dataRef.current, geos);
+          const p = computeChildPos(
+            focusId,
+            dataRef.current,
+            geos,
+            DEFAULT_LAYOUT_CONFIG,
+            dataRef.current.rootDirections,
+          );
           if (!p) return;
           placement = { x: p.x, y: p.y };
           const parentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
@@ -1927,7 +1964,12 @@ function BoardInner({
             });
           }
           const geosAtTidy = liveGeos.concat(filler);
-          const movesAll = tidyAllRoots(geosAtTidy, dataRef.current.edges, DEFAULT_TIDY_CONFIG);
+          const movesAll = tidyAllRoots(
+            geosAtTidy,
+            dataRef.current.edges,
+            DEFAULT_TIDY_CONFIG,
+            dataRef.current.rootDirections,
+          );
           if (movesAll.length > 0) applyTidyMoves(movesAll);
           if (!newId || !placement) return;
           // Final position = tidied move, falling back to ReactFlow geo, then
@@ -2529,6 +2571,36 @@ function BoardInner({
     [setData],
   );
 
+  // Set a tree-root direction, then immediately re-tidy that root's subtree
+  // so the layout matches the new axis. Save is debounced via setData.
+  const setRootDirection = useCallback(
+    (rootId: string, dir: RootDirection) => {
+      setData((prev) => {
+        const cur = prev.rootDirections?.[rootId];
+        if (cur === dir) return prev;
+        const next: Record<string, RootDirection> = { ...(prev.rootDirections ?? {}) };
+        next[rootId] = dir;
+        return { ...prev, rootDirections: next };
+      });
+      // Tidy fires one frame later so the rootDirections update propagates
+      // through React before tidySubtree consults it.
+      requestAnimationFrame(() => {
+        const geoFn = getNodeGeosRef.current;
+        const applyFn = applyTidyMovesRef.current;
+        if (!geoFn || !applyFn) return;
+        const moves = tidySubtree(
+          rootId,
+          geoFn(),
+          dataRef.current.edges,
+          DEFAULT_TIDY_CONFIG,
+          dataRef.current.rootDirections,
+        );
+        if (moves.length > 0) applyFn(moves);
+      });
+    },
+    [setData],
+  );
+
   // Each contextMenu handler builds its own item list — adding new rows for a
   // given target type just means appending here. No central dispatcher needed.
   const onNodeContextMenu = useCallback(
@@ -2560,9 +2632,34 @@ function BoardInner({
           onSelect: () => removeIssueFromBoard(node.id),
         });
       }
+
+      // Direction picker — only on mindmap roots (no incoming edges). Reads
+      // current direction (default "right") and shows it with a leading ✓.
+      // Clicking a row writes back the new direction and re-tidies the
+      // subtree synchronously so the user sees the new axis immediately.
+      const hasIncoming = dataRef.current.edges.some((e) => e.target === node.id);
+      if (!hasIncoming) {
+        const cur: RootDirection = dataRef.current.rootDirections?.[node.id] ?? "right";
+        const dirItems: { id: string; label: string; dir: RootDirection }[] = [
+          { id: "dir-right", label: "Direction: Right", dir: "right" },
+          { id: "dir-left", label: "Direction: Left", dir: "left" },
+          { id: "dir-up", label: "Direction: Up", dir: "up" },
+          { id: "dir-down", label: "Direction: Down", dir: "down" },
+        ];
+        dirItems.forEach((d, i) => {
+          items.push({
+            id: d.id,
+            label: d.label,
+            checked: cur === d.dir,
+            separatorAbove: i === 0,
+            onSelect: () => setRootDirection(node.id, d.dir),
+          });
+        });
+      }
+
       setMenu({ x, y, items });
     },
-    [localCoords, copyCardId, deleteNote, removeIssueFromBoard],
+    [localCoords, copyCardId, deleteNote, removeIssueFromBoard, setRootDirection],
   );
 
   const onEdgeContextMenu = useCallback(

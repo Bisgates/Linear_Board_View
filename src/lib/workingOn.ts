@@ -61,6 +61,15 @@ export interface BoardEdge {
 }
 
 /**
+ * Mindmap growth direction for a root node (a node with no incoming edge).
+ * Children, layout (F / Shift+F), Tab / Shift+Tab insertion, and the edge
+ * stem all mirror this axis. Non-root nodes inherit their tree's direction
+ * implicitly via the root they hang off — there's no per-child override.
+ * Missing entries default to "right" (legacy behavior, every existing board).
+ */
+export type RootDirection = "right" | "left" | "up" | "down";
+
+/**
  * A movement-only grouping: when any member is selected, all members get
  * selected (so xyflow drags them together); other behaviors (edit, edge,
  * detail panel) stay independent. Each node id can belong to at most one
@@ -82,6 +91,15 @@ export interface BoardData {
   noteNodes: NoteNode[];
   edges: BoardEdge[];
   groups: GroupBox[];
+  /**
+   * Per-root-node growth direction. Only the root of a tree (no incoming
+   * edges) is consulted — its whole subtree mirrors the chosen axis. Keys
+   * are node ids; missing entries default to "right". Stored as a flat map
+   * (rather than a field on NoteNode) so the same shape works uniformly for
+   * note roots AND issue roots — issue nodes live in `issueMembers` and
+   * carry no per-node object on the board.
+   */
+  rootDirections?: Record<string, RootDirection>;
 }
 
 export const EMPTY_BOARD: BoardData = {
@@ -89,6 +107,7 @@ export const EMPTY_BOARD: BoardData = {
   noteNodes: [],
   edges: [],
   groups: [],
+  rootDirections: {},
 };
 
 // Tiny random id; not crypto, just unique enough within one user's session.

@@ -1,5 +1,8 @@
 # Version Log
 
+- [2026-05-19 19:29] v0.34.0 — mindmap 根节点 4 向生长 (右/左/上/下)
+  - 每棵树根节点可独立设方向，右键 root 选 Right/Left/Up/Down；Tab 插入、F/Shift+F tidy、edge stem 全部跟着方向走；旧 board 缺字段默认 right
+
 - [2026-05-19 16:49] v0.33.7 — ADD ISSUE / WORKING ON / CUSTOM 的 ▾ 换成 stroke chevron
   - unicode "▾" 是黑色实心三角，跟旁边 uppercase 11px label 视觉权重不搭；改成 10px 矩形 viewBox 内 1.4px stroke chevron，opacity 0.65 跟 paper 颜色调和
 
