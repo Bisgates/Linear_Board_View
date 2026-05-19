@@ -145,7 +145,7 @@ Webview devtools：右键 → Inspect Element（Tauri 自带 inspector，没有 
   - 修 bug / regression / 回滚 → `z += 1`。
   - proud 级里程碑（由 commit message 显式声明 `[proud]` 或用户明示）→ `x += 1`，`y = 0`，`z = 0`。
   - 纯 docs / chore / 格式化：不 bump，不写 log（除非用户要求）。
-- 维护 `VERSION_LOG.md`（仓库根目录）：每条 `- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话功能介绍>`，时间倒序。**只记用户可感知的功能/行为变化**，不写代码层面实现细节（文件名 / 函数 / 算法 / 行数都不写 —— 想看 diff 自己 `git show`）。需要补"为什么这么改"或非显然上下文（如"在哪个版本撤回"、"沟通失误"），下挂一条缩进 bullet，仍一句话写完；没必要就不加。
+- 维护 `VERSION_LOG.md`（仓库根目录）：每条 `- [YYYY-MM-DD HH:MM] vX.Y.Z — <一句话功能介绍>`，时间倒序。**时间用北京时间**（machine 本身在 CST，直接拿系统时间即可），**不写时区后缀**。**只记用户可感知的功能/行为变化**，不写代码层面实现细节（文件名 / 函数 / 算法 / 行数都不写 —— 想看 diff 自己 `git show`）。需要补"为什么这么改"或非显然上下文（如"在哪个版本撤回"、"沟通失误"），下挂一条缩进 bullet，仍一句话写完；没必要就不加。
 - 首次提交版本号 `0.0.1`。
 - agent 在执行 commit 前**先更新 `VERSION_LOG.md`**，把版本条目与代码改动放进**同一个 commit**，commit message 首行带上 `vX.Y.Z`。
 - `package.json` 的 `version` 字段也要同步到当前 `vX.Y.Z`。
