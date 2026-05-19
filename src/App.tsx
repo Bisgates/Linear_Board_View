@@ -567,12 +567,27 @@ export default function App() {
         showCheckUpdate={showCheckUpdate}
         checkUpdateBusy={checkUpdateBusy}
         onCheckUpdate={handleCheckUpdate}
-        leftSlot={
-          activeView === "working_on" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={workingOnIds} onAdd={addToWorkingOn} />
-          ) : activeView === "custom" ? (
-            <IssuePickerPopover issues={allIssues} workingOnIds={customIds} onAdd={addToCustom} />
-          ) : null
+        addIssueSlot={
+          <IssuePickerPopover
+            issues={allIssues}
+            workingOnIds={
+              activeView === "custom" ? customIds : workingOnIds
+            }
+            onAdd={
+              activeView === "custom"
+                ? addToCustom
+                : activeView === "working_on"
+                  ? addToWorkingOn
+                  : () => {}
+            }
+            targetView={
+              activeView === "working_on"
+                ? "working_on"
+                : activeView === "custom"
+                  ? "custom"
+                  : null
+            }
+          />
         }
       />
       {dropdownAnchor?.kind === "day" && wov.manifest && (

@@ -1171,11 +1171,20 @@ function BoardInner({
   // Apply the layout helpers' `shifts` array to issueMembers + noteNodes,
   // append the new note + (optional) edge, and emit one combined setData.
   // Used by both Tab (child) and Shift+Tab (sibling).
+  //
+  // `pivotChildId` — only set by Shift+Tab. When provided, the new parent→N
+  // edge is spliced into `edges` IMMEDIATELY AFTER the edge
+  // (parentEdgeSource → pivotChildId), instead of appended. This guarantees
+  // a deterministic [..., pivot, NEW, nextSibling, ...] sibling order even
+  // when ReactFlow hasn't measured the new node yet (so its Y reads as
+  // +Infinity in the immediate RAF tidy and the y-sort fallback in
+  // buildChildrenMap kicks in).
   const insertCardWithLayout = useCallback(
     (
       placement: { x: number; y: number; shifts: { id: string; dy: number }[] },
       parentEdgeSource: string | null,
       color: string,
+      pivotChildId?: string,
     ) => {
       const newId = shortId("n");
       const newEdgeId = shortId("e");
@@ -1190,17 +1199,34 @@ function BoardInner({
           return sh ? { ...n, y: n.y + sh.dy } : n;
         });
         noteNodes.push({ id: newId, body: "", x: placement.x, y: placement.y, color, cardId: mintCardIdFor(prev.noteNodes) });
-        const edges =
-          parentEdgeSource !== null
-            ? [
-                ...prev.edges,
-                {
-                  id: newEdgeId,
-                  source: parentEdgeSource,
-                  target: newId,
-                } satisfies BoardEdge,
-              ]
-            : prev.edges;
+        let edges: BoardEdge[] = prev.edges;
+        if (parentEdgeSource !== null) {
+          const newEdge: BoardEdge = {
+            id: newEdgeId,
+            source: parentEdgeSource,
+            target: newId,
+          };
+          if (pivotChildId) {
+            // Splice immediately after the pivot's incoming edge from the
+            // same parent. If we can't find one (defensive — caller invariant
+            // says pivotChildId must already be a child of parentEdgeSource),
+            // fall back to append.
+            const pivotIdx = prev.edges.findIndex(
+              (e) => e.source === parentEdgeSource && e.target === pivotChildId,
+            );
+            if (pivotIdx >= 0) {
+              edges = [
+                ...prev.edges.slice(0, pivotIdx + 1),
+                newEdge,
+                ...prev.edges.slice(pivotIdx + 1),
+              ];
+            } else {
+              edges = [...prev.edges, newEdge];
+            }
+          } else {
+            edges = [...prev.edges, newEdge];
+          }
+        }
         return { ...prev, issueMembers, noteNodes, edges };
       });
       setFocusedCardId(newId);
@@ -1472,7 +1498,8 @@ function BoardInner({
       if (dir) {
         const focusId = focusedCardIdRef.current;
         if (!focusId) return;
-        const next = findNeighbor(focusId, dir, getNodeGeos());
+        const geos = getNodeGeos();
+        const next = findNeighbor(focusId, dir, geos);
         if (next) {
           evt.preventDefault();
           setNodes((current) =>
@@ -1481,6 +1508,11 @@ function BoardInner({
             ),
           );
           setFocusedCardId(next);
+          // Pan the new focus into the visual comfort zone — same helper Tab
+          // uses for fresh cards, so even an already-on-screen but edge-hugging
+          // neighbor recenters into the central 50% of the viewport.
+          const geo = geos.find((g) => g.id === next);
+          if (geo) ensureNodeVisible(next, geo.x, geo.y, geo.w, geo.h);
         }
         return;
       }
@@ -1522,7 +1554,11 @@ function BoardInner({
           placement = { x: p.x, y: p.y };
           const currentNote = dataRef.current.noteNodes.find((n) => n.id === focusId);
           const color = currentNote?.color ?? DEFAULT_NOTE_COLOR;
-          newId = insertCardWithLayout(p, p.parentId, color);
+          // Pass focusId as the pivot so the new parent→N edge gets spliced
+          // immediately after the parent→focus edge — keeps siblings in
+          // [..., focus, N, nextSib, ...] order even before ReactFlow has
+          // measured the new card.
+          newId = insertCardWithLayout(p, p.parentId, color, focusId);
         } else {
           const p = computeChildPos(focusId, dataRef.current, geos);
           if (!p) return;
@@ -1535,7 +1571,39 @@ function BoardInner({
         // rebuilds its nodes — otherwise getNodeGeos() wouldn't see the
         // inserted card and tidyAllRoots would skip it.
         requestAnimationFrame(() => {
-          const movesAll = tidyAllRoots(getNodeGeos(), dataRef.current.edges, DEFAULT_TIDY_CONFIG);
+          // Build the geo table from BOTH ReactFlow's measured store AND the
+          // authoritative `dataRef.current`. ReactFlow can lag one frame
+          // behind a fresh setData (new node not yet committed to its
+          // store), in which case the new card's y reads as undefined and
+          // buildChildrenMap sorts it to the END of its siblings — that's
+          // the v0.29.x regression. Filling in missing geos from data
+          // guarantees the just-inserted card has its intended midpoint y
+          // by the time tidy runs.
+          const liveGeos = getNodeGeos();
+          const seen = new Set(liveGeos.map((g) => g.id));
+          const filler: NodeGeo[] = [];
+          for (const n of dataRef.current.noteNodes) {
+            if (seen.has(n.id)) continue;
+            filler.push({
+              id: n.id,
+              x: n.x,
+              y: n.y,
+              w: DEFAULT_LAYOUT_CONFIG.defaultW,
+              h: DEFAULT_LAYOUT_CONFIG.defaultH,
+            });
+          }
+          for (const [id, p] of Object.entries(dataRef.current.issueMembers)) {
+            if (seen.has(id)) continue;
+            filler.push({
+              id,
+              x: p.x,
+              y: p.y,
+              w: DEFAULT_LAYOUT_CONFIG.defaultW,
+              h: DEFAULT_LAYOUT_CONFIG.defaultH,
+            });
+          }
+          const geosAtTidy = liveGeos.concat(filler);
+          const movesAll = tidyAllRoots(geosAtTidy, dataRef.current.edges, DEFAULT_TIDY_CONFIG);
           if (movesAll.length > 0) applyTidyMoves(movesAll);
           if (!newId || !placement) return;
           // Final position = tidied move, falling back to ReactFlow geo, then
@@ -2214,6 +2282,7 @@ function BoardInner({
         edgesFocusable
         deleteKeyCode={["Backspace", "Delete"]}
         {...SHARED_FLOW_PROPS}
+        maxZoom={1.2}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="rgba(120,116,108,0.38)" />
         <ViewportPortal>

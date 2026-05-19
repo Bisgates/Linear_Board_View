@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.31.0 [2026-05-19 14:35] — UI 调（zoom / 方向键 pan / ADD ISSUE 固定位）+ Shift+Tab 顺序 fix 二次修
+  - 缩放上限从 200% 收到 120%，再怎么 pinch 也不会把卡片放成全屏怪兽
+  - 方向键换 halo 后顺手把新焦点 pan 到 viewport 舒适区（25%–75%），靠边的卡也居中露脸
+  - ADD ISSUE 按钮永远显示在右侧 ViewSwitcher 左边；不在 Working On / Custom 时按钮 disable + tooltip 提示，再不让顶栏 chip 左右滑动
+  - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建终于真的回到 [A,B,N,C]（v0.29.0 那一波只改了 Y 没改 edges 顺序也没处理 ReactFlow 测量未到位的情况）
+
 - v0.29.0 [2026-05-19 11:55] — iCloud Drive 自动备份 + 一堆 bug 修
   - 每天 00:00/12:00/15:00/18:00/21:00 把整个 data 目录拷到 `~/Library/Mobile Documents/com~apple~CloudDocs/LinearBoardBackup/<时间戳>/`，保留最近 30 天；iCloud Drive 没开就静默跳过
   - Shift+Tab 在 [A,B,C] 兄弟里选 B 新建，顺序回到 [A,B,N,C]（之前 N 总掉到最末尾）
