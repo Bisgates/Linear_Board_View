@@ -2,6 +2,12 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.32.0 [2026-05-19 15:51] — ⌘V 走 OS clipboard 单一路径 + 空格聚焦视觉中心 + drag-reparent 自动 tidy + drop cue 改光晕
+  - ⌘C 把卡片打包成 `linear-board-cards:<base64>` envelope 写进系统剪贴板；⌘V 只看系统剪贴板：图片→图，envelope→卡，纯文本→新建 note，空→不动；内存 buffer 整条退役
+  - 没焦点时按空格自动把 halo 落到 viewport 视觉中心最近的卡，并 pan 进舒适区（不进 edit，也不开 DetailPanel）
+  - 拖一张卡丢到另一张上完成 reparent：edge 重连 + 同帧整理 A 子树到 B 右侧；落到自己 descendant 上识别为 cycle，只移位置不 reparent；空白处 drop 只移位置不整理
+  - drag 时悬停 target 的视觉反馈从 2px 红边换成两层暖红光晕（rgba 0.18 + 0.35），读起来是"卡在发光"不是"卡被画框"
+
 - v0.31.0 [2026-05-19 14:35] — UI 调（zoom / 方向键 pan / ADD ISSUE 固定位）+ Shift+Tab 顺序 fix 二次修
   - 缩放上限从 200% 收到 120%，再怎么 pinch 也不会把卡片放成全屏怪兽
   - 方向键换 halo 后顺手把新焦点 pan 到 viewport 舒适区（25%–75%），靠边的卡也居中露脸
