@@ -235,22 +235,48 @@ function ViewSwitcher({
           <span>Working On</span>
           {/* Suffix has a FIXED width (not maxWidth) so swapping the active
               day-view via `d` / dropdown doesn't change the tab's outer
-              width — the rest of the bar stops sliding around. */}
+              width — the rest of the bar stops sliding around. Middle dot is
+              its own span at a larger size, vertically centered between the
+              uppercase title and the lowercase label. */}
           <span
             style={{
-              fontWeight: 400,
-              opacity: 0.7,
-              textTransform: "none",
-              letterSpacing: 0,
-              fontSize: 10,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               width: 100,
-              display: "inline-block",
+              overflow: "hidden",
             }}
           >
-            {workingOnLabel ? `· ${workingOnLabel}` : ""}
+            {workingOnLabel && (
+              <>
+                <span
+                  aria-hidden
+                  style={{
+                    fontSize: 14,
+                    lineHeight: 1,
+                    opacity: 0.45,
+                    flexShrink: 0,
+                    transform: "translateY(-1px)",
+                  }}
+                >
+                  ·
+                </span>
+                <span
+                  style={{
+                    fontWeight: 400,
+                    opacity: 0.7,
+                    textTransform: "none",
+                    letterSpacing: 0,
+                    fontSize: 10,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {workingOnLabel}
+                </span>
+              </>
+            )}
           </span>
         </button>
         <button
@@ -353,19 +379,43 @@ function ViewSwitcher({
           ) : (
             <span
               style={{
-                fontWeight: 400,
-                opacity: 0.7,
-                textTransform: "none",
-                letterSpacing: 0,
-                fontSize: 10,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
                 width: 100,
-                display: "inline-block",
+                overflow: "hidden",
               }}
             >
-              {customLabel ? `· ${customLabel}` : ""}
+              {customLabel && (
+                <>
+                  <span
+                    aria-hidden
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1,
+                      opacity: 0.45,
+                      flexShrink: 0,
+                      transform: "translateY(-1px)",
+                    }}
+                  >
+                    ·
+                  </span>
+                  <span
+                    style={{
+                      fontWeight: 400,
+                      opacity: 0.7,
+                      textTransform: "none",
+                      letterSpacing: 0,
+                      fontSize: 10,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {customLabel}
+                  </span>
+                </>
+              )}
             </span>
           )}
         </button>

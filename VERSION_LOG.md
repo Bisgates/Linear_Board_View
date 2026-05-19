@@ -2,6 +2,9 @@
 
 格式：`- vX.Y.Z [YYYY-MM-DD HH:MM] — <一句话标题>`，时间倒序。只记用户可感知的功能/行为变化；需要补"为什么"再下挂一条缩进 bullet 一句话写完。详细规则见 `CLAUDE.md` → Pride Versioning。
 
+- v0.33.6 [2026-05-19 17:25] — WORKING ON / CUSTOM tab 中间分隔点单独画大一号
+  - middle dot 跟 label 拆成两个 span，dot fontSize 10 → 14、垂直对中、opacity 0.45，跟 uppercase title 视觉上对齐
+
 - v0.33.5 [2026-05-19 17:20] — WORKING ON 后缀宽度 140 → 100，原本留太多空白
 
 - v0.33.4 [2026-05-19 17:15] — pinned chip 拖排序换 pointer events 实现
