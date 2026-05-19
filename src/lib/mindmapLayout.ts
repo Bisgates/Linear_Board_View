@@ -274,36 +274,49 @@ export interface TidyMove {
  * Walk outgoing edges from `rootId` to build a parent→children adjacency map
  * restricted to the subtree, cycle-safe. Children are sorted by current Y so
  * the resulting layout preserves the user's visual ordering when possible.
+ *
+ * Ordering rule:
+ *  - PRIMARY: child's current Y (top-most child sits top-most after tidy).
+ *  - TIE-BREAKER: edge-array index from `edges`. This matters for newly
+ *    inserted siblings (Shift+Tab) whose Y hasn't been measured by
+ *    ReactFlow yet within the RAF that runs tidy — they would otherwise
+ *    sort as +Infinity and land at the END of the sibling row, regardless
+ *    of the midpoint Y `computeSiblingPos` produced. Insertion order in
+ *    the `edges` array thus becomes the authoritative fallback (caller is
+ *    expected to splice the new edge in the desired slot, NOT append).
  */
 function buildChildrenMap(
   rootId: string,
   edges: EdgeLike[],
   nodes: NodeGeo[],
 ): Map<string, string[]> {
+  const edgeIndex = new Map<string, number>();
+  edges.forEach((e, i) => edgeIndex.set(e.id, i));
+
   const out = new Map<string, string[]>();
   const visited = new Set<string>([rootId]);
   const queue: string[] = [rootId];
   while (queue.length > 0) {
     const cur = queue.shift()!;
-    const kids: string[] = [];
+    const kids: { id: string; edgeIdx: number }[] = [];
     for (const e of edges) {
       if (e.source !== cur) continue;
       if (visited.has(e.target)) continue;
       visited.add(e.target);
-      kids.push(e.target);
+      kids.push({ id: e.target, edgeIdx: edgeIndex.get(e.id) ?? Number.POSITIVE_INFINITY });
       queue.push(e.target);
     }
-    // Stable order: sort by the child's CURRENT Y so the tidied result
-    // preserves the user's intent (top-most stays top-most). Missing geo
-    // (e.g. a note just inserted by Tab whose measurement hasn't propagated
-    // to ReactFlow's store before our RAF tidy fires) sorts LAST — newly
-    // added cards land at the bottom of their sibling row, not the top.
     kids.sort((a, b) => {
-      const na = getNode(a, nodes);
-      const nb = getNode(b, nodes);
-      return (na?.y ?? Number.POSITIVE_INFINITY) - (nb?.y ?? Number.POSITIVE_INFINITY);
+      const na = getNode(a.id, nodes);
+      const nb = getNode(b.id, nodes);
+      const ya = na?.y ?? Number.POSITIVE_INFINITY;
+      const yb = nb?.y ?? Number.POSITIVE_INFINITY;
+      if (ya !== yb) return ya - yb;
+      // Tie / both unmeasured → fall back to the edges-array order so the
+      // caller's splice position is honored.
+      return a.edgeIdx - b.edgeIdx;
     });
-    out.set(cur, kids);
+    out.set(cur, kids.map((k) => k.id));
   }
   return out;
 }

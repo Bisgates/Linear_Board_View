@@ -6,6 +6,14 @@ interface Props {
   issues: IssueRecord[];
   workingOnIds: Set<string>;
   onAdd: (issueId: string) => void;
+  /**
+   * Which view the picker will write into. `null` means the active tab is
+   * neither Working On nor Custom — render the button DISABLED (with a
+   * tooltip) and keep its width so the surrounding TopBar layout doesn't
+   * jiggle when the user toggles between All / Agent_tmp and Working On /
+   * Custom.
+   */
+  targetView?: "working_on" | "custom" | null;
 }
 
 type Row =
@@ -55,12 +63,19 @@ function groupRows(issues: IssueRecord[]): Row[] {
   return rows;
 }
 
-export function IssuePickerPopover({ issues, workingOnIds, onAdd }: Props) {
+export function IssuePickerPopover({ issues, workingOnIds, onAdd, targetView = "working_on" }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const disabled = targetView === null;
+
+  // Auto-close when the active view loses a writable target (so the popover
+  // doesn't linger open while the chip itself becomes disabled).
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -107,7 +122,18 @@ export function IssuePickerPopover({ issues, workingOnIds, onAdd }: Props) {
     <div style={{ position: "relative" }}>
       <button
         ref={buttonRef}
-        onClick={() => setOpen((s) => !s)}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((s) => !s);
+        }}
+        disabled={disabled}
+        title={
+          disabled
+            ? "Switch to Working On / Custom to add issues"
+            : targetView === "custom"
+              ? "Add an issue to the active Custom view"
+              : "Add an issue to the active Working On view"
+        }
         style={{
           border: "1px solid var(--hairline)",
           background: open ? "var(--paper-deep)" : "var(--paper-soft)",
@@ -119,8 +145,10 @@ export function IssuePickerPopover({ issues, workingOnIds, onAdd }: Props) {
           fontWeight: 600,
           letterSpacing: "0.06em",
           textTransform: "uppercase",
-          cursor: "pointer",
-          transition: "background 0.15s",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.45 : 1,
+          transition: "background 0.15s, opacity 0.15s",
+          whiteSpace: "nowrap",
         }}
       >
         Add issue ▾

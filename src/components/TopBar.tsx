@@ -22,9 +22,16 @@ interface TopBarProps {
   onCustomExpand?: (anchor: { x: number; y: number; width: number }) => void;
   /** Double-click on the Custom tab commits a new name for the active custom view. */
   onRenameActiveCustom?: (name: string) => void;
-  leftSlot?: React.ReactNode;
   /** Sits between the left cluster and the right ViewSwitcher group. */
   centerSlot?: React.ReactNode;
+  /**
+   * Always-rendered chip that sits OUTSIDE the rest of the ViewSwitcher tabs
+   * but to the immediate left of the "All Issues" tab. Pinning it here
+   * (instead of conditionally inside the left zone) keeps the rest of the
+   * top bar's horizontal layout stable when the active view changes — the
+   * issue count and ViewSwitcher tabs no longer slide left/right.
+   */
+  addIssueSlot?: React.ReactNode;
   // Updater entry surfaced inside the hamburger menu (Tauri runtime only).
   showCheckUpdate?: boolean;
   checkUpdateBusy?: boolean;
@@ -45,8 +52,8 @@ export function TopBar({
   customLabel,
   onCustomExpand,
   onRenameActiveCustom,
-  leftSlot,
   centerSlot,
+  addIssueSlot,
   showCheckUpdate,
   checkUpdateBusy,
   onCheckUpdate,
@@ -77,7 +84,6 @@ export function TopBar({
         >
           Linear Board
         </span>
-        {leftSlot}
         <span
           style={{
             fontSize: 11,
@@ -106,6 +112,7 @@ export function TopBar({
         {centerSlot}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {addIssueSlot}
         <ViewSwitcher
           value={activeView}
           onChange={onViewChange}
