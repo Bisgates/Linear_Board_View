@@ -213,6 +213,8 @@ export function PinnedTabsStrip({
               gap: 6,
               maxWidth: 220,
               touchAction: "none",
+              userSelect: "none",
+              WebkitUserSelect: "none",
             }}
           >
             <span style={{ opacity: 0.55 }}>{idx + 1}</span>

@@ -1,5 +1,8 @@
 # Version Log
 
+- [2026-05-20 14:26] v0.35.4 — 顶栏 tab + pinned chip 也禁止右键选文字
+  - v0.35.3 只处理了下拉行，顶栏 CUSTOM · INVES 那段 + pinned chip "3DGS" 还会被右键选中弹 macOS 查询菜单；在 tabBtnStyle helper + PinnedTabsStrip chip style 加 `user-select: none`，一次覆盖所有 tab 按钮
+
 - [2026-05-20 14:22] v0.35.3 — 删 stride slider 开发组件 + dropdown 行禁止右键选中文字
   - 底部 ↕ STRIDE 滑块是开发期调参用的，不该 ship；删 UI 但保留 240 作为 mindmapLayout 默认值
   - WORKING ON / CUSTOM dropdown 里 view 行右键时 WebKit 会先选中文字再弹菜单（preventDefault 拦不住选择层），给行加 `user-select: none`（编辑态例外）
