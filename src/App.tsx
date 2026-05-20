@@ -667,6 +667,7 @@ export default function App() {
             activeViewId={activeView === "custom" ? cv.activeId : null}
             onActivate={handleActivatePinned}
             onReorder={pinned.reorder}
+            onUnpin={pinned.unpin}
           />
         }
       />

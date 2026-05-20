@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 
 export interface PinnedTabEntry {
   viewId: string;
@@ -10,6 +11,17 @@ interface Props {
   activeViewId: string | null;
   onActivate: (viewId: string) => void;
   onReorder: (fromIdx: number, toIdx: number) => void;
+  /** Right-click → "Unpin tab" → removes the chip from the strip. */
+  onUnpin: (viewId: string) => void;
+}
+
+// Position + payload for the right-click context menu. Coordinates are
+// page-relative (clientX/Y + scroll) because BoardContextMenu uses
+// `position: absolute` against the document body.
+interface MenuState {
+  x: number;
+  y: number;
+  viewId: string;
 }
 
 interface DropTarget {
@@ -25,9 +37,16 @@ const DRAG_THRESHOLD = 4;
 // hijacks the event for file-into-app). Pointer events bypass that entirely
 // — they're synthesized from the trackpad/mouse stream and don't talk to
 // macOS's drag service.
-export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: Props) {
+export function PinnedTabsStrip({
+  tabs,
+  activeViewId,
+  onActivate,
+  onReorder,
+  onUnpin,
+}: Props) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   // Per-pointer-gesture state. None of this needs to trigger re-render —
   // visual feedback is driven by `dragIdx` + `dropTarget` above.
@@ -67,7 +86,19 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
     onReorder(from, insertIdx);
   };
 
+  const menuItems: MenuItem[] = menu
+    ? [
+        {
+          id: "unpin",
+          label: "Unpin tab",
+          tone: "danger",
+          onSelect: () => onUnpin(menu.viewId),
+        },
+      ]
+    : [];
+
   return (
+    <>
     <div
       ref={stripRef}
       role="tablist"
@@ -145,6 +176,18 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
               setDragIdx(null);
               setDropTarget(null);
             }}
+            onContextMenu={(e) => {
+              // Right-click opens the unpin menu. Cancel any pointer-down
+              // drag bookkeeping that the browser may have started — the
+              // gesture turned into a context-menu invocation, not a drag.
+              e.preventDefault();
+              e.stopPropagation();
+              pressedIdxRef.current = null;
+              draggingRef.current = false;
+              setDragIdx(null);
+              setDropTarget(null);
+              setMenu({ x: e.clientX, y: e.clientY, viewId: tab.viewId });
+            }}
             title={`Custom · ${tab.name}  (press ${idx + 1})`}
             style={{
               border: "none",
@@ -186,5 +229,14 @@ export function PinnedTabsStrip({ tabs, activeViewId, onActivate, onReorder }: P
         );
       })}
     </div>
+    {menu && (
+      <BoardContextMenu
+        x={menu.x}
+        y={menu.y}
+        items={menuItems}
+        onDismiss={() => setMenu(null)}
+      />
+    )}
+    </>
   );
 }

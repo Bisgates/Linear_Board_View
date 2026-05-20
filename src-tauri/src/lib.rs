@@ -15,6 +15,7 @@
 //     custom/                             <- custom views
 //       views.json
 //       cv_xxxx.json
+//     pinned_tabs.json                    <- top-bar pinned chip order
 //
 // All read paths return an empty value (rather than 404) when the file is
 // missing — that matches the Vite dev plugin's behaviour and keeps the
@@ -489,6 +490,28 @@ async fn delete_custom_view_board(app: AppHandle, view_id: String) -> AppResult<
     Ok(())
 }
 
+// ---------- Pinned tabs ----------
+//
+// Pinned tabs (the strip of fixed chips in the top bar) used to live in
+// localStorage, but WebKit's per-bundle storage can be wiped when the .app is
+// replaced by `npm run release`, so we lift the ordered id list into the data
+// dir. File shape: `{ "order": ["cv_xxx", "cv_yyy"] }`. The frontend handles
+// reconciliation against the live custom-view list — we just store/recall.
+
+#[tauri::command]
+async fn read_pinned_tabs(app: AppHandle) -> AppResult<Value> {
+    let p = data_root(&app)?.join("pinned_tabs.json");
+    let fallback = serde_json::json!({ "order": [] });
+    read_json_or::<Value>(&p, fallback).await
+}
+
+#[tauri::command]
+async fn write_pinned_tabs(app: AppHandle, order: Vec<String>) -> AppResult<()> {
+    let p = data_root(&app)?.join("pinned_tabs.json");
+    let payload = serde_json::json!({ "order": order });
+    atomic_write_json(&p, &payload).await
+}
+
 // Open a local path / URL via macOS `open`. Mirrors the dev-only
 // `POST /api/open` route — Tauri-bundled apps run with the user's privileges,
 // so the surface is intentionally identical: anything the user could double-
@@ -560,6 +583,8 @@ pub fn run() {
             read_custom_view_board,
             write_custom_view_board,
             delete_custom_view_board,
+            read_pinned_tabs,
+            write_pinned_tabs,
             open_path,
             read_linear_api_key,
             backup_now,
