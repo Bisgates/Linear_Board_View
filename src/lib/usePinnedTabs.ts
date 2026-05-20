@@ -52,7 +52,7 @@ export interface UsePinnedTabs {
  * legacy localStorage value into the on-disk store, then clear the localStorage
  * entry so it can't drift.
  */
-export function usePinnedTabs(existingIds: string[]): UsePinnedTabs {
+export function usePinnedTabs(existingIds: string[], existingIdsLoaded: boolean): UsePinnedTabs {
   const [order, setOrder] = useState<string[]>([]);
   // We don't want to write the empty initial state back to disk before the
   // hydration finishes — that would erase the on-disk list when the existingIds
@@ -118,11 +118,17 @@ export function usePinnedTabs(existingIds: string[]): UsePinnedTabs {
   }, [order, existingSet]);
 
   // If reconciliation dropped any ids, persist the cleaned list so we don't
-  // re-process the orphan on every render. Guard the setState behind the
-  // identity check so we don't loop, and behind hydratedRef so we don't write
-  // back the empty initial state before hydration has run.
+  // re-process the orphan on every render. Three gates:
+  //   1. hydratedRef — don't write the empty initial state back before
+  //      `readPinnedTabs()` resolves.
+  //   2. existingIdsLoaded — caller signals when `existingIds` reflects the
+  //      real custom-view manifest. Before that it's `[]`, and reconciling
+  //      against [] would wrongly treat every pinned id as an orphan and
+  //      wipe disk. Caught by codex review on v0.35.1.
+  //   3. reconciled !== order — identity check so we don't loop.
   useEffect(() => {
     if (!hydratedRef.current) return;
+    if (!existingIdsLoaded) return;
     if (reconciled !== order) {
       setOrder(reconciled);
       if (isTauri()) {
@@ -131,7 +137,7 @@ export function usePinnedTabs(existingIds: string[]): UsePinnedTabs {
         });
       }
     }
-  }, [reconciled, order]);
+  }, [reconciled, order, existingIdsLoaded]);
 
   const persist = useCallback((next: string[]) => {
     if (!isTauri()) return;

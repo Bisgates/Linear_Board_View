@@ -2351,15 +2351,13 @@ function BoardInner({
         };
       });
 
-      // Post-commit: flip ReactFlow selection so only the pasted cards are
-      // highlighted. User can then drag the whole group to fine-tune position
-      // (they explicitly asked for this auto-select after paste).
-      requestAnimationFrame(() => {
-        if (newlyAddedIds.size === 0) return;
-        reactFlow.setNodes((nodes) =>
-          nodes.map((n) => ({ ...n, selected: newlyAddedIds.has(n.id) })),
-        );
-      });
+      // Hand the new ids to the nodes-rebuild useEffect (which fires
+      // synchronously after the data update commits) so it sets selection
+      // in the same render. A RAF here can lose against the rebuild and
+      // get its selection wiped — caught by codex review on v0.35.0.
+      if (newlyAddedIds.size > 0) {
+        pendingSelectionRef.current = new Set(newlyAddedIds);
+      }
 
       const parts: string[] = [];
       if (addedIssues) parts.push(`${addedIssues} issue`);

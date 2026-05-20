@@ -1,5 +1,10 @@
 # Version Log
 
+- [2026-05-20 12:20] v0.35.2 — codex review 抓的 3 个 race / 死代码修干净
+  - paste 自动选中：删掉残留的 RAF setNodes（会跟 nodes-rebuild useEffect 抢，造成选中被立刻擦掉），改用 `pendingSelectionRef` 一条路
+  - pinned tab 启动 race：之前 cv.manifest 还没 load 时 existingIds=[]，reconcile pass 会把磁盘上 pinned 全当 orphan 抹了；usePinnedTabs 加 `existingIdsLoaded` 参数，未 load 不 reconcile
+  - day view 新建 TOCTOU：连点 "New" 两次能绕过去重检查；handleCreate 加 in-flight ref，第一次没 resolve 之前 drop 第二次
+
 - [2026-05-20 11:57] v0.35.1 — pinned tab 跨版本持久化 + 右键 Unpin + day view 当日去重 + × delete 真删
   - pinned tabs 从 localStorage 迁到 `<data>/pinned_tabs.json`（带一次性迁移），升级 app 不再清空；右键 chip 出 "Unpin tab"
   - 当日已有 day view 时再点 "New" 落到已有那个，不新建重复；历史的多个同日 view 不动

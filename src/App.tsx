@@ -469,29 +469,40 @@ export default function App() {
     return cv.manifest.views.find((v) => v.id === cv.activeId)?.name;
   }, [cv.manifest, cv.activeId]);
 
+  const handleCreateInFlightRef = useRef(false);
   const handleCreate = useCallback(async () => {
-    // Only one day view per day: if a view already exists for today
-    // (name prefix `YYYY-MM-DD `), reuse it instead of stacking duplicates
-    // like `… (2)`, `… (3)`. Historical days with multiple views from older
-    // app versions stay untouched — we only gate fresh creation for today.
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const dd = String(now.getDate()).padStart(2, "0");
-    const todayPrefix = `${yyyy}-${mm}-${dd}`;
-    const existingToday = wov.manifest?.views.find(
-      (v) => v.name === todayPrefix || v.name.startsWith(`${todayPrefix} `),
-    );
-    if (existingToday) {
-      wov.setActiveId(existingToday.id);
-      setActiveView("working_on");
-      pushToast("info", `今日 day view 已存在，已切换到 "${existingToday.name}"`);
-      return;
-    }
-    const newId = await wov.createView();
-    if (newId) {
-      setActiveView("working_on");
-      pushToast("success", `已创建 day view`);
+    // Re-entrancy guard: codex review caught a TOCTOU on v0.35.1 — two fast
+    // clicks could both pass the "no today view" check before `createView`
+    // resolves, since `createView` closes over a stale manifest snapshot too.
+    // Drop the second invocation outright until the first resolves.
+    if (handleCreateInFlightRef.current) return;
+    handleCreateInFlightRef.current = true;
+    try {
+      // Only one day view per day: if a view already exists for today
+      // (name prefix `YYYY-MM-DD `), reuse it instead of stacking duplicates
+      // like `… (2)`, `… (3)`. Historical days with multiple views from older
+      // app versions stay untouched — we only gate fresh creation for today.
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const todayPrefix = `${yyyy}-${mm}-${dd}`;
+      const existingToday = wov.manifest?.views.find(
+        (v) => v.name === todayPrefix || v.name.startsWith(`${todayPrefix} `),
+      );
+      if (existingToday) {
+        wov.setActiveId(existingToday.id);
+        setActiveView("working_on");
+        pushToast("info", `今日 day view 已存在，已切换到 "${existingToday.name}"`);
+        return;
+      }
+      const newId = await wov.createView();
+      if (newId) {
+        setActiveView("working_on");
+        pushToast("success", `已创建 day view`);
+      }
+    } finally {
+      handleCreateInFlightRef.current = false;
     }
   }, [wov, pushToast]);
 
@@ -563,7 +574,10 @@ export default function App() {
     () => cv.manifest?.views.map((v) => v.id) ?? [],
     [cv.manifest],
   );
-  const pinned = usePinnedTabs(customViewIds);
+  // Gate reconciliation on cv.manifest being non-null — before that, the
+  // ids array is `[]` and the hook would mistakenly wipe pinned-on-disk
+  // entries as "orphans". (See codex review on v0.35.1.)
+  const pinned = usePinnedTabs(customViewIds, cv.manifest != null);
 
   const pinnedTabEntries = useMemo<PinnedTabEntry[]>(() => {
     if (!cv.manifest) return [];
