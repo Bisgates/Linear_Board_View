@@ -1,5 +1,10 @@
 # Version Log
 
+- [2026-05-20 14:39] v0.35.5 — 图片粘贴自动 resize + JPEG 重编码，修单卡 5 MB 拖卡死的性能问题
+  - 之前 paste image 只把 `w`/`h` 改成渲染尺寸，原始 base64 PNG 整张存进 BoardData，2000×2200 截图 ≈ 5 MB → 每次 drag tick 都过 React state、save 文件、跳转 board 第一次 paint 都卡
+  - canvas 缩到 max 800 px 宽（兼顾 2x zoom 清晰）+ `toDataURL("image/jpeg", 0.85)`，典型 screenshot 5 MB → 50-300 KB
+  - 已存在的卡不动（user 说 ignore existing）
+
 - [2026-05-20 14:26] v0.35.4 — 顶栏 tab + pinned chip 也禁止右键选文字
   - v0.35.3 只处理了下拉行，顶栏 CUSTOM · INVES 那段 + pinned chip "3DGS" 还会被右键选中弹 macOS 查询菜单；在 tabBtnStyle helper + PinnedTabsStrip chip style 加 `user-select: none`，一次覆盖所有 tab 按钮
 

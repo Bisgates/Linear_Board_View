@@ -2030,10 +2030,34 @@ function BoardInner({
             if (selectedNote) targetId = selectedNote.id;
           }
 
+          // Downsize the source bitmap before storing — earlier versions kept
+          // the full clipboard PNG as a data URL and used `w`/`h` only as a
+          // CSS render hint, so a 2000×2200 retina screenshot ended up as a
+          // 5 MB string flowing through React state on every drag tick (root
+          // cause of "this card lags / its board is slow to open"). Cap at
+          // MAX_W and re-encode as JPEG (screenshots compress ~30× vs PNG).
+          const MAX_W = 800;
+          const downscale = Math.min(1, MAX_W / nw);
+          const encW = Math.max(1, Math.round(nw * downscale));
+          const encH = Math.max(1, Math.round(nh * downscale));
+          const canvas = document.createElement("canvas");
+          canvas.width = encW;
+          canvas.height = encH;
+          let encodedSrc = src;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(probe, 0, 0, encW, encH);
+            try {
+              encodedSrc = canvas.toDataURL("image/jpeg", 0.85);
+            } catch {
+              /* canvas tainted (e.g. cross-origin source) — fall back to raw src */
+            }
+          }
+
           const TARGET_W = 280 - 8 - 24;
           const w = Math.min(nw, TARGET_W);
           const h = Math.max(1, Math.round((w / nw) * nh));
-          const newImg: NoteImage = { id: shortId("img"), src, w, h };
+          const newImg: NoteImage = { id: shortId("img"), src: encodedSrc, w, h };
 
           if (targetId) {
             const id = targetId;
