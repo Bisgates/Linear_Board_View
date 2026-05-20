@@ -1,5 +1,10 @@
 # Version Log
 
+- [2026-05-20 11:57] v0.35.1 — pinned tab 跨版本持久化 + 右键 Unpin + day view 当日去重 + × delete 真删
+  - pinned tabs 从 localStorage 迁到 `<data>/pinned_tabs.json`（带一次性迁移），升级 app 不再清空；右键 chip 出 "Unpin tab"
+  - 当日已有 day view 时再点 "New" 落到已有那个，不新建重复；历史的多个同日 view 不动
+  - WORKING ON 下拉的 × 之前调 `window.confirm()` 在 Tauri WKWebView 里恒 false 所以从来没真删过，改成两次点击 inline 确认（第一次变红 "确认?"，第二次提交，3 秒超时自动 disarm）
+
 - [2026-05-20 10:38] v0.35.0 — up/down 纵向间距滑块 + 复制粘贴改进 + 画布最大缩放 1.2→2 + 切方向整画布 tidy
   - 画布底部滑块（160-700 px，默认 240，存 localStorage），只在存在 up/down 树时显示；拖动实时重 tidy，长卡片自动加 40 px clearance 避免重叠
   - 复制 up/down 树粘贴后保留 direction；位置算法优先视野内不重叠的候选偏移，找不到就视野中心；粘贴自动多选整组方便拖动
