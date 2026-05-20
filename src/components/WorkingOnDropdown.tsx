@@ -193,6 +193,12 @@ export function WorkingOnDropdown({
                 cursor: isEditing ? "default" : "pointer",
                 background: isActive ? "var(--paper-deep)" : "transparent",
                 borderBottom: "1px solid var(--hairline-soft, rgba(26,24,20,0.06))",
+                // Block right-click character selection on view labels — even
+                // with preventDefault on the contextmenu, WebKit still paints
+                // a selection rect before the menu mounts. Editing input
+                // overrides this back to auto via its own style.
+                userSelect: isEditing ? "auto" : "none",
+                WebkitUserSelect: isEditing ? "auto" : "none",
               }}
               onMouseEnter={(e) => {
                 if (!isActive && !isEditing) e.currentTarget.style.background = "var(--paper-soft)";

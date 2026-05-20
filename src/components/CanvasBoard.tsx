@@ -35,7 +35,6 @@ import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clip
 import {
   DEFAULT_LAYOUT_CONFIG,
   DEFAULT_TIDY_CONFIG,
-  DEFAULT_VERTICAL_STRIDE,
   computeChildPos,
   computeSiblingPos,
   findAllRoots,
@@ -44,16 +43,9 @@ import {
   tidyAllRoots,
   tidySubtree,
   type Direction,
-  type LayoutConfig,
   type NodeGeo,
-  type TidyConfig,
   type TidyMove,
 } from "../lib/mindmapLayout";
-
-const VSTRIDE_STORAGE_KEY = "linear_board_view:vstride:v1";
-const VSTRIDE_MIN = 160;
-const VSTRIDE_MAX = 700;
-const VSTRIDE_STEP = 10;
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -752,59 +744,6 @@ function BoardInner({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
-  // User-tunable y-stride for up/down trees. Loaded once from localStorage,
-  // saved on every change. Layout configs below are memoized against it.
-  const [vStride, setVStrideState] = useState<number>(() => {
-    try {
-      const raw = localStorage.getItem(VSTRIDE_STORAGE_KEY);
-      if (raw) {
-        const n = parseInt(raw, 10);
-        if (Number.isFinite(n) && n >= VSTRIDE_MIN && n <= VSTRIDE_MAX) return n;
-      }
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_VERTICAL_STRIDE;
-  });
-  const layoutConfig = useMemo<LayoutConfig>(
-    () => ({ ...DEFAULT_LAYOUT_CONFIG, verticalStride: vStride }),
-    [vStride],
-  );
-  const tidyConfig = useMemo<TidyConfig>(
-    () => ({ ...DEFAULT_TIDY_CONFIG, verticalStride: vStride }),
-    [vStride],
-  );
-  // Setter that updates state, persists, AND immediately re-tidies all roots
-  // so the user sees the new spacing as they drag the slider.
-  const setVStride = useCallback((next: number) => {
-    setVStrideState(next);
-    try {
-      localStorage.setItem(VSTRIDE_STORAGE_KEY, String(next));
-    } catch {
-      /* ignore */
-    }
-    const geoFn = getNodeGeosRef.current;
-    const applyFn = applyTidyMovesRef.current;
-    if (!geoFn || !applyFn) return;
-    const moves = tidyAllRoots(
-      geoFn(),
-      dataRef.current.edges,
-      { ...DEFAULT_TIDY_CONFIG, verticalStride: next },
-      dataRef.current.rootDirections,
-    );
-    if (moves.length > 0) applyFn(moves);
-  }, []);
-  // Slider only renders when at least one tree grows up/down — for a board
-  // of right-only trees the y-stride knob has no effect.
-  const hasVerticalTree = useMemo(() => {
-    const dirs = data.rootDirections;
-    if (!dirs) return false;
-    for (const k of Object.keys(dirs)) {
-      const v = dirs[k];
-      if (v === "up" || v === "down") return true;
-    }
-    return false;
-  }, [data.rootDirections]);
   // Board-level keyboard focus — the card that arrow keys / Space / Tab /
   // Shift+Tab act on. Distinct from `selectedIssueId` (which gates the
   // right-hand DetailPanel): arrow nav moves the halo without opening any
@@ -1394,7 +1333,7 @@ function BoardInner({
               const moves = tidyAllRoots(
                 geoFn(),
                 dataRef.current.edges,
-                tidyConfig,
+                DEFAULT_TIDY_CONFIG,
                 dataRef.current.rootDirections,
               );
               if (moves.length > 0) applyFn(moves);
@@ -1839,7 +1778,7 @@ function BoardInner({
             focusId,
             geos,
             edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1848,7 +1787,7 @@ function BoardInner({
           const moves = tidyAllRoots(
             geos,
             edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1975,7 +1914,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            layoutConfig,
+            DEFAULT_LAYOUT_CONFIG,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -1992,7 +1931,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            layoutConfig,
+            DEFAULT_LAYOUT_CONFIG,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -2040,7 +1979,7 @@ function BoardInner({
           const movesAll = tidyAllRoots(
             geosAtTidy,
             dataRef.current.edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (movesAll.length > 0) applyTidyMoves(movesAll);
@@ -2791,13 +2730,13 @@ function BoardInner({
         const moves = tidyAllRoots(
           geoFn(),
           dataRef.current.edges,
-          tidyConfig,
+          DEFAULT_TIDY_CONFIG,
           dataRef.current.rootDirections,
         );
         if (moves.length > 0) applyFn(moves);
       });
     },
-    [setData, tidyConfig],
+    [setData],
   );
 
   // Each contextMenu handler builds its own item list — adding new rows for a
@@ -3114,57 +3053,6 @@ function BoardInner({
           items={menu.items}
           onDismiss={() => setMenu(null)}
         />
-      )}
-      {hasVerticalTree && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 18,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "var(--paper)",
-            border: "1px solid var(--hairline)",
-            borderRadius: 6,
-            padding: "6px 12px",
-            boxShadow: "0 4px 14px rgba(26,24,20,0.18)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            fontFamily: "var(--sans)",
-            fontSize: 11,
-            color: "var(--ink-soft)",
-            zIndex: 25,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 9,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              color: "var(--muted)",
-            }}
-          >
-            ↕ stride
-          </span>
-          <input
-            type="range"
-            min={VSTRIDE_MIN}
-            max={VSTRIDE_MAX}
-            step={VSTRIDE_STEP}
-            value={vStride}
-            onChange={(e) => setVStride(parseInt(e.target.value, 10))}
-            style={{ width: 160 }}
-          />
-          <span
-            style={{
-              minWidth: 32,
-              textAlign: "right",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {vStride}
-          </span>
-        </div>
       )}
     </div>
   );

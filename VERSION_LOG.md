@@ -1,5 +1,9 @@
 # Version Log
 
+- [2026-05-20 14:22] v0.35.3 — 删 stride slider 开发组件 + dropdown 行禁止右键选中文字
+  - 底部 ↕ STRIDE 滑块是开发期调参用的，不该 ship；删 UI 但保留 240 作为 mindmapLayout 默认值
+  - WORKING ON / CUSTOM dropdown 里 view 行右键时 WebKit 会先选中文字再弹菜单（preventDefault 拦不住选择层），给行加 `user-select: none`（编辑态例外）
+
 - [2026-05-20 12:20] v0.35.2 — codex review 抓的 3 个 race / 死代码修干净
   - paste 自动选中：删掉残留的 RAF setNodes（会跟 nodes-rebuild useEffect 抢，造成选中被立刻擦掉），改用 `pendingSelectionRef` 一条路
   - pinned tab 启动 race：之前 cv.manifest 还没 load 时 existingIds=[]，reconcile pass 会把磁盘上 pinned 全当 orphan 抹了；usePinnedTabs 加 `existingIdsLoaded` 参数，未 load 不 reconcile
