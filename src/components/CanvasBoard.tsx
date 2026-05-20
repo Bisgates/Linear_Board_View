@@ -35,7 +35,6 @@ import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clip
 import {
   DEFAULT_LAYOUT_CONFIG,
   DEFAULT_TIDY_CONFIG,
-  DEFAULT_VERTICAL_STRIDE,
   computeChildPos,
   computeSiblingPos,
   findAllRoots,
@@ -44,16 +43,9 @@ import {
   tidyAllRoots,
   tidySubtree,
   type Direction,
-  type LayoutConfig,
   type NodeGeo,
-  type TidyConfig,
   type TidyMove,
 } from "../lib/mindmapLayout";
-
-const VSTRIDE_STORAGE_KEY = "linear_board_view:vstride:v1";
-const VSTRIDE_MIN = 160;
-const VSTRIDE_MAX = 700;
-const VSTRIDE_STEP = 10;
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -752,59 +744,6 @@ function BoardInner({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
-  // User-tunable y-stride for up/down trees. Loaded once from localStorage,
-  // saved on every change. Layout configs below are memoized against it.
-  const [vStride, setVStrideState] = useState<number>(() => {
-    try {
-      const raw = localStorage.getItem(VSTRIDE_STORAGE_KEY);
-      if (raw) {
-        const n = parseInt(raw, 10);
-        if (Number.isFinite(n) && n >= VSTRIDE_MIN && n <= VSTRIDE_MAX) return n;
-      }
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_VERTICAL_STRIDE;
-  });
-  const layoutConfig = useMemo<LayoutConfig>(
-    () => ({ ...DEFAULT_LAYOUT_CONFIG, verticalStride: vStride }),
-    [vStride],
-  );
-  const tidyConfig = useMemo<TidyConfig>(
-    () => ({ ...DEFAULT_TIDY_CONFIG, verticalStride: vStride }),
-    [vStride],
-  );
-  // Setter that updates state, persists, AND immediately re-tidies all roots
-  // so the user sees the new spacing as they drag the slider.
-  const setVStride = useCallback((next: number) => {
-    setVStrideState(next);
-    try {
-      localStorage.setItem(VSTRIDE_STORAGE_KEY, String(next));
-    } catch {
-      /* ignore */
-    }
-    const geoFn = getNodeGeosRef.current;
-    const applyFn = applyTidyMovesRef.current;
-    if (!geoFn || !applyFn) return;
-    const moves = tidyAllRoots(
-      geoFn(),
-      dataRef.current.edges,
-      { ...DEFAULT_TIDY_CONFIG, verticalStride: next },
-      dataRef.current.rootDirections,
-    );
-    if (moves.length > 0) applyFn(moves);
-  }, []);
-  // Slider only renders when at least one tree grows up/down — for a board
-  // of right-only trees the y-stride knob has no effect.
-  const hasVerticalTree = useMemo(() => {
-    const dirs = data.rootDirections;
-    if (!dirs) return false;
-    for (const k of Object.keys(dirs)) {
-      const v = dirs[k];
-      if (v === "up" || v === "down") return true;
-    }
-    return false;
-  }, [data.rootDirections]);
   // Board-level keyboard focus — the card that arrow keys / Space / Tab /
   // Shift+Tab act on. Distinct from `selectedIssueId` (which gates the
   // right-hand DetailPanel): arrow nav moves the halo without opening any
@@ -1394,7 +1333,7 @@ function BoardInner({
               const moves = tidyAllRoots(
                 geoFn(),
                 dataRef.current.edges,
-                tidyConfig,
+                DEFAULT_TIDY_CONFIG,
                 dataRef.current.rootDirections,
               );
               if (moves.length > 0) applyFn(moves);
@@ -1839,7 +1778,7 @@ function BoardInner({
             focusId,
             geos,
             edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1848,7 +1787,7 @@ function BoardInner({
           const moves = tidyAllRoots(
             geos,
             edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1975,7 +1914,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            layoutConfig,
+            DEFAULT_LAYOUT_CONFIG,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -1992,7 +1931,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            layoutConfig,
+            DEFAULT_LAYOUT_CONFIG,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -2040,7 +1979,7 @@ function BoardInner({
           const movesAll = tidyAllRoots(
             geosAtTidy,
             dataRef.current.edges,
-            tidyConfig,
+            DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
           );
           if (movesAll.length > 0) applyTidyMoves(movesAll);
@@ -2091,10 +2030,34 @@ function BoardInner({
             if (selectedNote) targetId = selectedNote.id;
           }
 
+          // Downsize the source bitmap before storing — earlier versions kept
+          // the full clipboard PNG as a data URL and used `w`/`h` only as a
+          // CSS render hint, so a 2000×2200 retina screenshot ended up as a
+          // 5 MB string flowing through React state on every drag tick (root
+          // cause of "this card lags / its board is slow to open"). Cap at
+          // MAX_W and re-encode as JPEG (screenshots compress ~30× vs PNG).
+          const MAX_W = 800;
+          const downscale = Math.min(1, MAX_W / nw);
+          const encW = Math.max(1, Math.round(nw * downscale));
+          const encH = Math.max(1, Math.round(nh * downscale));
+          const canvas = document.createElement("canvas");
+          canvas.width = encW;
+          canvas.height = encH;
+          let encodedSrc = src;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(probe, 0, 0, encW, encH);
+            try {
+              encodedSrc = canvas.toDataURL("image/jpeg", 0.85);
+            } catch {
+              /* canvas tainted (e.g. cross-origin source) — fall back to raw src */
+            }
+          }
+
           const TARGET_W = 280 - 8 - 24;
           const w = Math.min(nw, TARGET_W);
           const h = Math.max(1, Math.round((w / nw) * nh));
-          const newImg: NoteImage = { id: shortId("img"), src, w, h };
+          const newImg: NoteImage = { id: shortId("img"), src: encodedSrc, w, h };
 
           if (targetId) {
             const id = targetId;
@@ -2351,15 +2314,13 @@ function BoardInner({
         };
       });
 
-      // Post-commit: flip ReactFlow selection so only the pasted cards are
-      // highlighted. User can then drag the whole group to fine-tune position
-      // (they explicitly asked for this auto-select after paste).
-      requestAnimationFrame(() => {
-        if (newlyAddedIds.size === 0) return;
-        reactFlow.setNodes((nodes) =>
-          nodes.map((n) => ({ ...n, selected: newlyAddedIds.has(n.id) })),
-        );
-      });
+      // Hand the new ids to the nodes-rebuild useEffect (which fires
+      // synchronously after the data update commits) so it sets selection
+      // in the same render. A RAF here can lose against the rebuild and
+      // get its selection wiped — caught by codex review on v0.35.0.
+      if (newlyAddedIds.size > 0) {
+        pendingSelectionRef.current = new Set(newlyAddedIds);
+      }
 
       const parts: string[] = [];
       if (addedIssues) parts.push(`${addedIssues} issue`);
@@ -2491,55 +2452,36 @@ function BoardInner({
         return;
       }
 
-      // ⌘V — OS clipboard is the only source. preventDefault unconditionally
-      // so WebKit doesn't synthesize a `paste` event into a focused input;
-      // we route to image / cards / plain-text branches ourselves.
-      evt.preventDefault();
-      const dispatchPaste = async () => {
-        // 1. Image branch — `clipboard.read()` exposes image mimes.
-        try {
-          const items = await navigator.clipboard.read();
-          for (const item of items) {
-            const imgType = item.types.find((t) => t.startsWith("image/"));
-            if (!imgType) continue;
-            const blob = await item.getType(imgType);
-            pasteImageBlob(blob);
-            return;
-          }
-        } catch {
-          // clipboard.read can reject (no permission, no image data). Fall
-          // through to text branch.
-        }
-        // 2. Text branch — envelope wins; otherwise paste as a single note.
-        let text = "";
-        try {
-          text = await navigator.clipboard.readText();
-        } catch {
-          return;
-        }
-        if (!text) return;
-        const cards = decodeCardsEnvelope(text);
-        if (cards) {
-          pasteCardsPayload(cards);
-          return;
-        }
-        pasteTextAsNote(text);
-      };
-      void dispatchPaste();
+      // ⌘V — do NOT intercept here. Earlier versions called
+      // `navigator.clipboard.read()` from this keydown branch, which in
+      // Tauri's WKWebView triggers Apple's "Paste" permission overlay (a
+      // big system button the user has to click). The native `paste` event
+      // bound below already has the clipboard data attached synchronously,
+      // no permission prompt, and bubbles from the focused element so
+      // textarea pastes still go where they should. Let it through.
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [reactFlow, onClipboardToast, pasteImageBlob, pasteCardsPayload, pasteTextAsNote]);
 
-  // Paste an image from the system clipboard. Target priority lives in
-  // `pasteImageBlob`. This listener handles non-keyboard paste flows (the
-  // ⌘V keydown branch above intercepts the kbd path and probes the OS
-  // clipboard directly). preventDefault is called only when an image is
-  // found, so plain-text paste into a textarea still works.
+  // Single paste pipeline: ⌘V fires a synthetic native `paste` event with
+  // `clipboardData` already populated by WebKit (no async clipboard.read
+  // call, so no "Paste" permission overlay in Tauri WKWebView). Routes:
+  //   1. Image file → pasteImageBlob, preventDefault
+  //   2. Cards envelope text → pasteCardsPayload, preventDefault
+  //   3. Plain text — only intercept when focus is on the canvas (not a
+  //      textarea / contenteditable), so inline note editing still uses the
+  //      default text insertion path.
   useEffect(() => {
+    const isEditableTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
     const onPaste = (evt: ClipboardEvent) => {
       const dt = evt.clipboardData;
       if (!dt) return;
+      // 1. Image branch — wins over text for clipboard items that carry both.
       let file: File | null = null;
       for (let i = 0; i < dt.items.length; i++) {
         const it = dt.items[i];
@@ -2548,13 +2490,34 @@ function BoardInner({
           break;
         }
       }
-      if (!file) return;
+      if (file) {
+        evt.preventDefault();
+        pasteImageBlob(file);
+        return;
+      }
+      // 2. Cards envelope — text we previously wrote with the prefix.
+      const text = dt.getData("text/plain");
+      if (text) {
+        const cards = decodeCardsEnvelope(text);
+        if (cards) {
+          evt.preventDefault();
+          pasteCardsPayload(cards);
+          return;
+        }
+      }
+      // 3. Plain text fallback. Let WebKit handle pastes into editable
+      // targets natively; only redirect to "paste as a new note" when the
+      // focus is on the bare canvas.
+      if (!text) return;
+      if (isEditableTarget(evt.target) || isEditableTarget(document.activeElement)) {
+        return;
+      }
       evt.preventDefault();
-      pasteImageBlob(file);
+      pasteTextAsNote(text);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [pasteImageBlob]);
+  }, [pasteImageBlob, pasteCardsPayload, pasteTextAsNote]);
 
   // Drag the entire group by grabbing the dashed frame's empty interior
   // (frame sits at zIndex -1 so cards still catch clicks on their own area).
@@ -2793,13 +2756,13 @@ function BoardInner({
         const moves = tidyAllRoots(
           geoFn(),
           dataRef.current.edges,
-          tidyConfig,
+          DEFAULT_TIDY_CONFIG,
           dataRef.current.rootDirections,
         );
         if (moves.length > 0) applyFn(moves);
       });
     },
-    [setData, tidyConfig],
+    [setData],
   );
 
   // Each contextMenu handler builds its own item list — adding new rows for a
@@ -3116,57 +3079,6 @@ function BoardInner({
           items={menu.items}
           onDismiss={() => setMenu(null)}
         />
-      )}
-      {hasVerticalTree && (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 18,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "var(--paper)",
-            border: "1px solid var(--hairline)",
-            borderRadius: 6,
-            padding: "6px 12px",
-            boxShadow: "0 4px 14px rgba(26,24,20,0.18)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            fontFamily: "var(--sans)",
-            fontSize: 11,
-            color: "var(--ink-soft)",
-            zIndex: 25,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 9,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              color: "var(--muted)",
-            }}
-          >
-            ↕ stride
-          </span>
-          <input
-            type="range"
-            min={VSTRIDE_MIN}
-            max={VSTRIDE_MAX}
-            step={VSTRIDE_STEP}
-            value={vStride}
-            onChange={(e) => setVStride(parseInt(e.target.value, 10))}
-            style={{ width: 160 }}
-          />
-          <span
-            style={{
-              minWidth: 32,
-              textAlign: "right",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {vStride}
-          </span>
-        </div>
       )}
     </div>
   );

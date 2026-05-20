@@ -1,5 +1,31 @@
 # Version Log
 
+- [2026-05-20 14:50] v0.35.6 — paste 路径合一走 native 事件，去掉 WKWebView 的 "Paste" 系统按钮 + 修粘图后双指变缩放
+  - ⌘V keydown 分支之前调 `navigator.clipboard.read()`，Tauri WKWebView 安全策略会弹 macOS 系统 "Paste" 大按钮要点一下；并且这个按钮抢焦点导致后续 wheel 事件 ctrlKey 状态混乱，两指 pan 变 pinch zoom
+  - 删 keydown 拦截，统一走 native `paste` 事件（同步拿 clipboardData，无权限提示），image/cards 信封/纯文本三条分支都通过 evt.clipboardData 路由
+
+- [2026-05-20 14:39] v0.35.5 — 图片粘贴自动 resize + JPEG 重编码，修单卡 5 MB 拖卡死的性能问题
+  - 之前 paste image 只把 `w`/`h` 改成渲染尺寸，原始 base64 PNG 整张存进 BoardData，2000×2200 截图 ≈ 5 MB → 每次 drag tick 都过 React state、save 文件、跳转 board 第一次 paint 都卡
+  - canvas 缩到 max 800 px 宽（兼顾 2x zoom 清晰）+ `toDataURL("image/jpeg", 0.85)`，典型 screenshot 5 MB → 50-300 KB
+  - 已存在的卡不动（user 说 ignore existing）
+
+- [2026-05-20 14:26] v0.35.4 — 顶栏 tab + pinned chip 也禁止右键选文字
+  - v0.35.3 只处理了下拉行，顶栏 CUSTOM · INVES 那段 + pinned chip "3DGS" 还会被右键选中弹 macOS 查询菜单；在 tabBtnStyle helper + PinnedTabsStrip chip style 加 `user-select: none`，一次覆盖所有 tab 按钮
+
+- [2026-05-20 14:22] v0.35.3 — 删 stride slider 开发组件 + dropdown 行禁止右键选中文字
+  - 底部 ↕ STRIDE 滑块是开发期调参用的，不该 ship；删 UI 但保留 240 作为 mindmapLayout 默认值
+  - WORKING ON / CUSTOM dropdown 里 view 行右键时 WebKit 会先选中文字再弹菜单（preventDefault 拦不住选择层），给行加 `user-select: none`（编辑态例外）
+
+- [2026-05-20 12:20] v0.35.2 — codex review 抓的 3 个 race / 死代码修干净
+  - paste 自动选中：删掉残留的 RAF setNodes（会跟 nodes-rebuild useEffect 抢，造成选中被立刻擦掉），改用 `pendingSelectionRef` 一条路
+  - pinned tab 启动 race：之前 cv.manifest 还没 load 时 existingIds=[]，reconcile pass 会把磁盘上 pinned 全当 orphan 抹了；usePinnedTabs 加 `existingIdsLoaded` 参数，未 load 不 reconcile
+  - day view 新建 TOCTOU：连点 "New" 两次能绕过去重检查；handleCreate 加 in-flight ref，第一次没 resolve 之前 drop 第二次
+
+- [2026-05-20 11:57] v0.35.1 — pinned tab 跨版本持久化 + 右键 Unpin + day view 当日去重 + × delete 真删
+  - pinned tabs 从 localStorage 迁到 `<data>/pinned_tabs.json`（带一次性迁移），升级 app 不再清空；右键 chip 出 "Unpin tab"
+  - 当日已有 day view 时再点 "New" 落到已有那个，不新建重复；历史的多个同日 view 不动
+  - WORKING ON 下拉的 × 之前调 `window.confirm()` 在 Tauri WKWebView 里恒 false 所以从来没真删过，改成两次点击 inline 确认（第一次变红 "确认?"，第二次提交，3 秒超时自动 disarm）
+
 - [2026-05-20 10:38] v0.35.0 — up/down 纵向间距滑块 + 复制粘贴改进 + 画布最大缩放 1.2→2 + 切方向整画布 tidy
   - 画布底部滑块（160-700 px，默认 240，存 localStorage），只在存在 up/down 树时显示；拖动实时重 tidy，长卡片自动加 40 px clearance 避免重叠
   - 复制 up/down 树粘贴后保留 direction；位置算法优先视野内不重叠的候选偏移，找不到就视野中心；粘贴自动多选整组方便拖动

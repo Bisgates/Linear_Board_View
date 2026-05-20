@@ -51,9 +51,15 @@ export function WorkingOnDropdown({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  // Two-click delete confirmation: first × tap arms the button (turns red,
+  // shows "确认?"), second tap commits. Replaces `window.confirm()` which is
+  // unreliable inside the Tauri WKWebView (returns false without surfacing a
+  // dialog, so the original click did nothing visible).
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  const pendingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -61,6 +67,25 @@ export function WorkingOnDropdown({
       inputRef.current.select();
     }
   }, [editingId]);
+
+  // Auto-disarm pending delete after 3s so a stray first click doesn't sit
+  // ready forever.
+  useEffect(() => {
+    if (!pendingDeleteId) return;
+    if (pendingTimerRef.current !== null) {
+      window.clearTimeout(pendingTimerRef.current);
+    }
+    pendingTimerRef.current = window.setTimeout(() => {
+      setPendingDeleteId(null);
+      pendingTimerRef.current = null;
+    }, 3000);
+    return () => {
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+    };
+  }, [pendingDeleteId]);
 
   // Click outside → close. If a context menu is open, the first outside click
   // dismisses just the menu (matches platform context-menu conventions).
@@ -80,7 +105,7 @@ export function WorkingOnDropdown({
     return () => document.removeEventListener("mousedown", onDocDown);
   }, [onClose, contextMenu]);
 
-  // Esc → dismiss context menu first, otherwise close dropdown.
+  // Esc → dismiss context menu first, then disarm pending delete, then close.
   useEffect(() => {
     const onKey = (evt: KeyboardEvent) => {
       if (evt.key !== "Escape") return;
@@ -88,11 +113,15 @@ export function WorkingOnDropdown({
         setContextMenu(null);
         return;
       }
+      if (pendingDeleteId) {
+        setPendingDeleteId(null);
+        return;
+      }
       onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, contextMenu]);
+  }, [onClose, contextMenu, pendingDeleteId]);
 
   const commit = (id: string) => {
     const trimmed = draft.trim();
@@ -164,6 +193,12 @@ export function WorkingOnDropdown({
                 cursor: isEditing ? "default" : "pointer",
                 background: isActive ? "var(--paper-deep)" : "transparent",
                 borderBottom: "1px solid var(--hairline-soft, rgba(26,24,20,0.06))",
+                // Block right-click character selection on view labels — even
+                // with preventDefault on the contextmenu, WebKit still paints
+                // a selection rect before the menu mounts. Editing input
+                // overrides this back to auto via its own style.
+                userSelect: isEditing ? "auto" : "none",
+                WebkitUserSelect: isEditing ? "auto" : "none",
               }}
               onMouseEnter={(e) => {
                 if (!isActive && !isEditing) e.currentTarget.style.background = "var(--paper-soft)";
@@ -226,45 +261,62 @@ export function WorkingOnDropdown({
                   {v.name}
                 </span>
               )}
-              {!isEditing && (
-                <button
-                  type="button"
-                  title={isLastView ? "删除此 view（最后一个 view 删除后会自动新建一个空白 view）" : "删除此 view"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const msg = isLastView
-                      ? `删除 "${v.name}"？这是最后一个 view，删除后会自动新建一个空白 view。`
-                      : `删除 "${v.name}"？该 view 的位置与笔记将丢失。`;
-                    if (window.confirm(msg)) {
-                      onDelete(v.id);
-                    }
-                  }}
-                  style={{
-                    flexShrink: 0,
-                    width: 18,
-                    height: 18,
-                    border: "none",
-                    background: "transparent",
-                    color: canDelete ? "var(--muted)" : "var(--hairline)",
-                    cursor: canDelete ? "pointer" : "not-allowed",
-                    fontSize: 14,
-                    lineHeight: 1,
-                    padding: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 3,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (canDelete) e.currentTarget.style.color = "var(--warm-red)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (canDelete) e.currentTarget.style.color = "var(--muted)";
-                  }}
-                >
-                  ×
-                </button>
-              )}
+              {!isEditing && (() => {
+                const isPending = pendingDeleteId === v.id;
+                const title = isPending
+                  ? "再点一次确认删除"
+                  : isLastView
+                    ? "删除此 view（最后一个 view 删除后会自动新建一个空白 view）"
+                    : "删除此 view";
+                return (
+                  <button
+                    type="button"
+                    title={title}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isPending) {
+                        // Second click → commit.
+                        setPendingDeleteId(null);
+                        onDelete(v.id);
+                      } else {
+                        // First click → arm.
+                        setPendingDeleteId(v.id);
+                      }
+                    }}
+                    style={{
+                      flexShrink: 0,
+                      // Pending state widens the button to hold "确认?" text.
+                      width: isPending ? "auto" : 18,
+                      minWidth: 18,
+                      height: 18,
+                      padding: isPending ? "0 6px" : 0,
+                      border: isPending ? "1px solid var(--warm-red)" : "none",
+                      background: isPending ? "var(--warm-red)" : "transparent",
+                      color: isPending ? "var(--paper)" : canDelete ? "var(--muted)" : "var(--hairline)",
+                      cursor: canDelete ? "pointer" : "not-allowed",
+                      fontSize: isPending ? 11 : 14,
+                      lineHeight: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: 3,
+                      fontFamily: "var(--sans)",
+                      letterSpacing: isPending ? "0.02em" : undefined,
+                      transition: "background 120ms, color 120ms",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (isPending) return;
+                      if (canDelete) e.currentTarget.style.color = "var(--warm-red)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (isPending) return;
+                      if (canDelete) e.currentTarget.style.color = "var(--muted)";
+                    }}
+                  >
+                    {isPending ? "确认?" : "×"}
+                  </button>
+                );
+              })()}
             </div>
           );
         })}

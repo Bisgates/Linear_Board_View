@@ -502,5 +502,10 @@ function tabBtnStyle(active: boolean, dense: boolean): React.CSSProperties {
     textTransform: "uppercase",
     cursor: "pointer",
     transition: "background 0.15s",
+    // Block right-click character selection on tab labels. WebKit paints the
+    // selection rect before the macOS lookup menu mounts even when our
+    // onContextMenu calls preventDefault.
+    userSelect: "none",
+    WebkitUserSelect: "none",
   };
 }
