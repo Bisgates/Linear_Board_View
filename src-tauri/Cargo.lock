@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "linear-board"
-version = "0.26.2"
+version = "0.36.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1862,6 +1862,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-process",

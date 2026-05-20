@@ -28,8 +28,9 @@ import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { BoardData, BoardEdge, GroupBox, NoteImage, RootDirection } from "../lib/workingOn";
+import type { BoardData, BoardEdge, GroupBox, RootDirection } from "../lib/workingOn";
 import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
+import { saveImageBytes } from "../lib/tauriInvoke";
 import { generateCardId } from "../lib/cardId";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
 import {
@@ -192,8 +193,6 @@ function buildNodes(
         working: note.working ?? false,
         done: note.done ?? false,
         autoEdit: note.id === editingNoteId,
-        images: note.images,
-        textSegments: note.textSegments,
         cardId: note.cardId,
       } as unknown as Record<string, unknown>,
       draggable: true,
@@ -903,8 +902,6 @@ function BoardInner({
         color?: string;
         working?: boolean;
         done?: boolean;
-        images?: NoteImage[];
-        textSegments?: string[];
       },
     ) => {
       setData((prev) => ({
@@ -1056,8 +1053,6 @@ function BoardInner({
             color?: string;
             working?: boolean;
             done?: boolean;
-            images?: NoteImage[];
-            textSegments?: string[];
           }) => commitNote(withStyle.id, patch),
           onEditEnd: noteEditingFinished,
           resolveCardLink,
@@ -2008,6 +2003,19 @@ function BoardInner({
   // cards buffer) and the native `paste` event (drag-drop / non-keyboard
   // paste flows) funnel through here so the targeting + sizing logic stays
   // in one place.
+  //
+  // Pipeline:
+  //   1. Resize source bitmap to ≤ 800px wide and re-encode as JPEG @0.85.
+  //      Earlier versions kept the full clipboard PNG inline as a data URL
+  //      (root cause of "this card lags / its board is slow to open" — a
+  //      2000×2200 retina screenshot ballooned to a 5 MB string flowing
+  //      through React state on every drag tick). We now save the bytes to
+  //      disk via `save_image_bytes` (Rust, sha256 content-addressed dedup)
+  //      and embed a markdown ref `![](<hash>.jpg)` in the note body.
+  //   2. Decide where the ref goes:
+  //      • Editing target's textarea focused → splice at cursor.
+  //      • Otherwise a single note selected → append to its body.
+  //      • Otherwise create a fresh image-only note at viewport centre.
   const pasteImageBlob = useCallback(
     (blob: Blob) => {
       const reader = new FileReader();
@@ -2019,23 +2027,6 @@ function BoardInner({
           const nw = probe.naturalWidth || 256;
           const nh = probe.naturalHeight || 192;
 
-          const editingId = editingNoteIdRef.current;
-          let targetId: string | null = null;
-          if (editingId && dataRef.current.noteNodes.some((n) => n.id === editingId)) {
-            targetId = editingId;
-          } else {
-            const selectedNote = reactFlow.getNodes().find(
-              (n) => n.selected && n.type === "note",
-            );
-            if (selectedNote) targetId = selectedNote.id;
-          }
-
-          // Downsize the source bitmap before storing — earlier versions kept
-          // the full clipboard PNG as a data URL and used `w`/`h` only as a
-          // CSS render hint, so a 2000×2200 retina screenshot ended up as a
-          // 5 MB string flowing through React state on every drag tick (root
-          // cause of "this card lags / its board is slow to open"). Cap at
-          // MAX_W and re-encode as JPEG (screenshots compress ~30× vs PNG).
           const MAX_W = 800;
           const downscale = Math.min(1, MAX_W / nw);
           const encW = Math.max(1, Math.round(nw * downscale));
@@ -2043,70 +2034,126 @@ function BoardInner({
           const canvas = document.createElement("canvas");
           canvas.width = encW;
           canvas.height = encH;
-          let encodedSrc = src;
           const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(probe, 0, 0, encW, encH);
-            try {
-              encodedSrc = canvas.toDataURL("image/jpeg", 0.85);
-            } catch {
-              /* canvas tainted (e.g. cross-origin source) — fall back to raw src */
-            }
-          }
+          if (!ctx) return;
+          ctx.drawImage(probe, 0, 0, encW, encH);
+          canvas.toBlob(
+            (jpegBlob) => {
+              if (!jpegBlob) return;
+              const run = async () => {
+                let bytes: Uint8Array;
+                try {
+                  const buf = await jpegBlob.arrayBuffer();
+                  bytes = new Uint8Array(buf);
+                } catch (err) {
+                  console.error("[paste-image] arrayBuffer failed", err);
+                  return;
+                }
+                let filename: string;
+                try {
+                  filename = await saveImageBytes(bytes);
+                } catch (err) {
+                  console.error("[paste-image] saveImageBytes failed", err);
+                  return;
+                }
+                const ref = `![](${filename})`;
 
-          const TARGET_W = 280 - 8 - 24;
-          const w = Math.min(nw, TARGET_W);
-          const h = Math.max(1, Math.round((w / nw) * nh));
-          const newImg: NoteImage = { id: shortId("img"), src: encodedSrc, w, h };
+                // 1. Cursor-aware insert into a focused note textarea.
+                const active = document.activeElement;
+                if (
+                  active instanceof HTMLTextAreaElement &&
+                  active.dataset.noteTextarea
+                ) {
+                  const targetId = active.dataset.noteTextarea;
+                  if (dataRef.current.noteNodes.some((n) => n.id === targetId)) {
+                    const start = active.selectionStart ?? active.value.length;
+                    const end = active.selectionEnd ?? start;
+                    const before = active.value.slice(0, start);
+                    const after = active.value.slice(end);
+                    // Sandwich the ref with surrounding blank lines so it
+                    // visually separates from neighbouring text — but only
+                    // when the neighbour isn't already a blank line.
+                    const leftPad = before.length === 0 || before.endsWith("\n") ? "" : "\n";
+                    const rightPad = after.length === 0 || after.startsWith("\n") ? "" : "\n";
+                    const insert = `${leftPad}${ref}${rightPad}`;
+                    const nextBody = `${before}${insert}${after}`;
+                    setData((prev) => ({
+                      ...prev,
+                      noteNodes: prev.noteNodes.map((n) =>
+                        n.id === targetId ? { ...n, body: nextBody } : n,
+                      ),
+                    }));
+                    // Restore cursor position right after the inserted ref so
+                    // the user can keep typing. React re-renders the textarea
+                    // with the new value next frame, so set the selection
+                    // after that has happened.
+                    const cursor = before.length + insert.length;
+                    requestAnimationFrame(() => {
+                      const el =
+                        active.isConnected && active.dataset.noteTextarea === targetId
+                          ? active
+                          : (document.querySelector(
+                              `textarea[data-note-textarea="${targetId}"]`,
+                            ) as HTMLTextAreaElement | null);
+                      if (!el) return;
+                      try {
+                        el.focus();
+                        el.setSelectionRange(cursor, cursor);
+                      } catch {
+                        /* selection on a detached textarea: ignore */
+                      }
+                    });
+                    return;
+                  }
+                }
 
-          if (targetId) {
-            const id = targetId;
-            setData((prev) => ({
-              ...prev,
-              noteNodes: prev.noteNodes.map((n) => {
-                if (n.id !== id) return n;
-                const imgs = [...(n.images ?? []), newImg];
-                const prevSegs =
-                  Array.isArray(n.textSegments) &&
-                  n.textSegments.length === (n.images ?? []).length + 1
-                    ? n.textSegments
-                    : (n.images ?? []).length === 0
-                      ? [n.body ?? ""]
-                      : [n.body ?? "", ...Array((n.images ?? []).length).fill("")];
-                const nextSegs = [...prevSegs, ""];
-                return {
-                  ...n,
-                  images: imgs,
-                  textSegments: nextSegs,
-                  body: nextSegs.join("\n"),
-                };
-              }),
-            }));
-            return;
-          }
+                // 2. Append to currently selected note (single note only —
+                // if multiple notes are selected, ambiguity → fall through
+                // to "create a new note").
+                const selectedNotes = reactFlow
+                  .getNodes()
+                  .filter((n) => n.selected && n.type === "note");
+                if (selectedNotes.length === 1 && selectedNotes[0]) {
+                  const targetId = selectedNotes[0].id;
+                  setData((prev) => ({
+                    ...prev,
+                    noteNodes: prev.noteNodes.map((n) => {
+                      if (n.id !== targetId) return n;
+                      const tail = n.body ? `${n.body.replace(/\n+$/, "")}\n\n${ref}` : ref;
+                      return { ...n, body: tail };
+                    }),
+                  }));
+                  return;
+                }
 
-          const rect = wrapperRef.current?.getBoundingClientRect();
-          const centerScreen = rect
-            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-            : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-          const center = reactFlow.screenToFlowPosition(centerScreen);
-          const id = shortId("n");
-          setData((prev) => ({
-            ...prev,
-            noteNodes: [
-              ...prev.noteNodes,
-              {
-                id,
-                body: "",
-                x: center.x,
-                y: center.y,
-                images: [newImg],
-                textSegments: ["", ""],
-                cardId: mintCardIdFor(prev.noteNodes),
-              },
-            ],
-          }));
-          setFocusedCardId(id);
+                // 3. No target → create a fresh image-only note at viewport
+                // centre.
+                const rect = wrapperRef.current?.getBoundingClientRect();
+                const centerScreen = rect
+                  ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+                  : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+                const center = reactFlow.screenToFlowPosition(centerScreen);
+                const id = shortId("n");
+                setData((prev) => ({
+                  ...prev,
+                  noteNodes: [
+                    ...prev.noteNodes,
+                    {
+                      id,
+                      body: ref,
+                      x: center.x,
+                      y: center.y,
+                      cardId: mintCardIdFor(prev.noteNodes),
+                    },
+                  ],
+                }));
+                setFocusedCardId(id);
+              };
+              void run();
+            },
+            "image/jpeg",
+            0.85,
+          );
         };
         probe.src = src;
       };

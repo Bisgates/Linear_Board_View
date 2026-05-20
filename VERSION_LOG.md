@@ -1,5 +1,10 @@
 # Version Log
 
+- [2026-05-20 15:17] v0.36.0 — 图片改成 markdown 文本引用 + 磁盘文件，去重 + 启动孤儿清理
+  - 粘贴的图片不再 inline base64 进 board JSON，而是 sha256 命名落盘 `<data>/images/<hash>.jpg`，body 里只留 `![](hash.jpg)` 的 markdown ref；同一张图粘多次自动指向同一文件
+  - 删掉四角拖拽 resize 和 NoteImage[]/textSegments[] 交错结构，note 现在就是单 textarea + 单 body 字符串
+  - 启动扫一遍所有 board JSON，把没被引用且 mtime > 7 天的图删掉（7 天保护刚粘还没 flush 的图）；老 board 自动 migrate 一次成 markdown 形态
+
 - [2026-05-20 14:50] v0.35.6 — paste 路径合一走 native 事件，去掉 WKWebView 的 "Paste" 系统按钮 + 修粘图后双指变缩放
   - ⌘V keydown 分支之前调 `navigator.clipboard.read()`，Tauri WKWebView 安全策略会弹 macOS 系统 "Paste" 大按钮要点一下；并且这个按钮抢焦点导致后续 wheel 事件 ctrlKey 状态混乱，两指 pan 变 pinch zoom
   - 删 keydown 拦截，统一走 native `paste` 事件（同步拿 clipboardData，无权限提示），image/cards 信封/纯文本三条分支都通过 evt.clipboardData 路由

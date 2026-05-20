@@ -1,15 +1,13 @@
 import { openPath } from "./tauriInvoke";
 
-export interface NoteImage {
-  id: string;
-  // Data URL (base64) — stored inline in the board JSON.
-  src: string;
-  w: number;
-  h: number;
-}
-
 export interface NoteNode {
   id: string;
+  // Markdown — plain text plus `![](<hash>.<ext>)` tokens for embedded
+  // images. The image file lives on disk under `<data>/images/<hash>.<ext>`
+  // (content-addressed; see `save_image_bytes` in `src-tauri/src/lib.rs`).
+  // Legacy notes used a separate `images[]` + `textSegments[]` interleaved
+  // pair — `lib/migrateImages.ts` flattens those into this single field on
+  // boot.
   body: string;
   x: number;
   y: number;
@@ -19,12 +17,6 @@ export interface NoteNode {
   // working — the click handler always clears the other).
   working?: boolean;
   done?: boolean;
-  images?: NoteImage[];
-  // Interleaved text segments — `textSegments[i]` renders before `images[i]`,
-  // and `textSegments[images.length]` is the trailing text after the last
-  // image. Length is always `images.length + 1`. `body` is kept as the joined
-  // value for back-compat with code that just needs flattened text.
-  textSegments?: string[];
   // Wiki-style cross-reference id. Format `YYMMDDxx` (date + 2 random
   // letters); see `lib/cardId.ts`. Stable across renames / drags so other
   // notes can reference this one with `[[YYMMDDxx]]` and the link survives

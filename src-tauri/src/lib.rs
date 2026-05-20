@@ -24,10 +24,13 @@
 mod backup;
 mod linear;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 use tokio::fs;
 
@@ -73,6 +76,14 @@ fn working_on_dir(app: &AppHandle) -> AppResult<PathBuf> {
 
 fn custom_dir(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(data_root(app)?.join("custom"))
+}
+
+// Directory holding pasted-image files. Each file is named `<sha256[..16]>.<ext>`
+// — content-addressed, so the same image pasted twice dedupes to one file.
+async fn images_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    let p = data_root(app)?.join("images");
+    ensure_dir(&p).await?;
+    Ok(p)
 }
 
 // Same allowlist as `src/server/boardStore.ts::ID_RE` — viewIds come from the
@@ -490,6 +501,161 @@ async fn delete_custom_view_board(app: AppHandle, view_id: String) -> AppResult<
     Ok(())
 }
 
+// ---------- Images (markdown-referenced, content-addressed) ----------
+//
+// Pasted images are written to `<data>/images/<hash>.jpg` (filename derived
+// from the first 16 hex chars of sha256(bytes), so identical pastes dedupe).
+// Notes reference them in their body via `![](<hash>.jpg)` markdown tokens,
+// served back to the WebView through the custom `imgref://` URI scheme
+// registered in `run()`.
+
+#[tauri::command]
+async fn save_image_bytes(app: AppHandle, bytes: Vec<u8>) -> AppResult<String> {
+    if bytes.is_empty() {
+        return Err(AppError::Other("save_image_bytes: empty payload".into()));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let digest = hasher.finalize();
+    // 16 hex chars = 64 bits of entropy — plenty for per-user dedup across a
+    // lifetime of pastes, while keeping the markdown token compact.
+    let hex = digest
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let filename = format!("{hex}.jpg");
+    let dir = images_dir(&app).await?;
+    let path = dir.join(&filename);
+    if !path.exists() {
+        fs::write(&path, &bytes).await?;
+    }
+    Ok(filename)
+}
+
+// Scan every board JSON under `<data>/` (all_issues_board, working_on/wov_*,
+// custom/cv_*), collect every `![](<filename>)` reference, then delete files
+// in `<data>/images/` that are unreferenced AND older than 7 days. The age
+// guard protects images that were just pasted but whose owning board hasn't
+// finished its 200ms-debounced save yet.
+#[tauri::command]
+async fn cleanup_orphan_images(app: AppHandle) -> AppResult<u32> {
+    let root = data_root(&app)?;
+    let mut referenced: HashSet<String> = HashSet::new();
+    let mut json_paths: Vec<PathBuf> = Vec::new();
+    let all_issues = root.join("all_issues_board.json");
+    if all_issues.exists() {
+        json_paths.push(all_issues);
+    }
+    for sub in ["working_on", "custom"] {
+        let dir = root.join(sub);
+        if !dir.exists() {
+            continue;
+        }
+        let mut rd = fs::read_dir(&dir).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                if stem == "views" {
+                    continue;
+                }
+            }
+            json_paths.push(p);
+        }
+    }
+    // Regex would be cleaner but pulls a crate; the markdown shape is fixed
+    // (`![](<hex>.<ext>)`), so a hand-rolled scanner is fine and avoids a dep.
+    for jp in &json_paths {
+        let Ok(bytes) = fs::read(jp).await else { continue };
+        let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+        collect_image_refs(text, &mut referenced);
+    }
+    let imgs_dir = images_dir(&app).await?;
+    let mut deleted: u32 = 0;
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let seven_days_secs: u64 = 7 * 24 * 60 * 60;
+    let mut rd = fs::read_dir(&imgs_dir).await?;
+    while let Some(entry) = rd.next_entry().await? {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if referenced.contains(name) {
+            continue;
+        }
+        // mtime guard — skip anything modified within the last 7 days even if
+        // it isn't referenced yet (newly pasted, board still flushing).
+        let meta = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mtime_secs = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(now_secs);
+        if now_secs.saturating_sub(mtime_secs) < seven_days_secs {
+            continue;
+        }
+        if fs::remove_file(&path).await.is_ok() {
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
+}
+
+// Walk `text` looking for `![](filename)` tokens where filename is
+// `[A-Za-z0-9]+.(jpg|jpeg|png|webp)`. Matches in-place — no allocations per
+// hit beyond the inserted String.
+fn collect_image_refs(text: &str, out: &mut HashSet<String>) {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if &bytes[i..i + 4] == b"![](" {
+            let start = i + 4;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b')' {
+                end += 1;
+            }
+            if end < bytes.len() && end > start {
+                let inner = &text[start..end];
+                if is_valid_image_ref(inner) {
+                    out.insert(inner.to_string());
+                }
+            }
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn is_valid_image_ref(s: &str) -> bool {
+    let (stem, ext) = match s.rsplit_once('.') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    if stem.is_empty() || !stem.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    matches!(ext, "jpg" | "jpeg" | "png" | "webp")
+}
+
+fn content_type_for(filename: &str) -> &'static str {
+    match filename.rsplit_once('.').map(|(_, e)| e) {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        _ => "image/jpeg",
+    }
+}
+
 // ---------- Pinned tabs ----------
 //
 // Pinned tabs (the strip of fixed chips in the top bar) used to live in
@@ -588,11 +754,50 @@ pub fn run() {
             open_path,
             read_linear_api_key,
             backup_now,
+            save_image_bytes,
+            cleanup_orphan_images,
             linear::linear_fetch_all_issues,
             linear::linear_fetch_workflow_states,
             linear::linear_update_issue,
             linear::linear_create_issue_comment,
         ])
+        // Custom URI scheme that serves pasted images straight from
+        // `<data>/images/`. The frontend uses `imgref://localhost/<filename>`
+        // as `<img src>` — no fs plugin / asset capability needed because
+        // the scheme is wired here in Rust. Sync handler is fine: images
+        // are small (≤800px JPEGs, see `pasteImageBlob`).
+        .register_uri_scheme_protocol("imgref", |ctx, request| {
+            let app = ctx.app_handle();
+            let path = request.uri().path();
+            let filename = path.trim_start_matches('/');
+            if !is_valid_image_ref(filename) {
+                return tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::BAD_REQUEST)
+                    .body(Vec::new())
+                    .unwrap();
+            }
+            let dir = match data_root(app) {
+                Ok(d) => d.join("images"),
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Vec::new())
+                        .unwrap();
+                }
+            };
+            let file_path = dir.join(filename);
+            match std::fs::read(&file_path) {
+                Ok(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", content_type_for(filename))
+                    .header("Cache-Control", "private, max-age=31536000, immutable")
+                    .body(bytes)
+                    .unwrap(),
+                Err(_) => tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::NOT_FOUND)
+                    .body(Vec::new())
+                    .unwrap(),
+            }
+        })
         .setup(|app| {
             // Pre-create app_data_dir/data so first-run writes don't race.
             let dir = data_root(&app.handle())?;
