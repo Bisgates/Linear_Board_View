@@ -140,6 +140,22 @@ export function writePinnedTabs(order: string[]): Promise<void> {
   return invoke<void>("write_pinned_tabs", { order });
 }
 
+// --- Images (markdown-referenced, content-addressed) ---
+// Pasted images live on disk under `<data>/images/<hash>.jpg`; notes embed
+// `![](<hash>.jpg)` in their body, and the WebView reads the bytes back via
+// the `imgref://` custom URI scheme registered in `src-tauri/src/lib.rs`.
+export function saveImageBytes(bytes: Uint8Array): Promise<string> {
+  // Tauri's IPC JSON-serializes Uint8Array as a number array; explicit
+  // conversion keeps the wire shape stable across runtimes.
+  return invoke<string>("save_image_bytes", { bytes: Array.from(bytes) });
+}
+
+// Server-side orphan sweep — scans every board JSON for `![](...)` references
+// and deletes images that are both unreferenced AND older than 7 days.
+export function cleanupOrphanImages(): Promise<number> {
+  return invoke<number>("cleanup_orphan_images");
+}
+
 // --- All-issues board ---
 export function readAllIssuesBoard(): Promise<BoardData> {
   return invoke<BoardData>("read_all_issues_board");

@@ -10,11 +10,13 @@ import { ToastStack, type ToastItem } from "./components/Toast";
 import { UpdaterModal } from "./components/UpdaterModal";
 import { loadIssues, type SnapshotFile } from "./lib/loadIssues";
 import {
+  cleanupOrphanImages,
   createIssueComment,
   isTauri,
   refetchAndPersist,
   updateIssue,
 } from "./lib/tauriInvoke";
+import { migrateImageNotes, noteNeedsImageMigration } from "./lib/migrateImages";
 import { checkForUpdate, runInstall, type UpdateInfo, type DownloadProgress } from "./lib/updater";
 import { maybeSynthesize } from "./lib/synthetic";
 import { applyFilter, deriveOptions, EMPTY_FILTER, type FilterState } from "./lib/filter";
@@ -220,6 +222,81 @@ export default function App() {
       return { ...prev, noteNodes: result.next };
     });
   }, [customBoard.loaded, customBoard.data.noteNodes, customBoard.setData]);
+
+  // One-shot per-board migration: any note that still carries the legacy
+  // `images[]` + `textSegments[]` shape gets its embedded images written to
+  // `<data>/images/<hash>.jpg` and its body rewritten to use `![](filename)`
+  // markdown tokens. Idempotent — once every note is clean, the early-out
+  // skips the effect on subsequent runs. Effect re-fires after the setData
+  // commits but `hasLegacy` short-circuits the second pass.
+  useEffect(() => {
+    if (!workingOn.loaded) return;
+    if (!workingOn.data.noteNodes.some(noteNeedsImageMigration)) return;
+    let cancelled = false;
+    (async () => {
+      const result = await migrateImageNotes(workingOn.data.noteNodes);
+      if (cancelled || result.migrated === 0) return;
+      workingOn.setData((prev) => {
+        if (!prev.noteNodes.some(noteNeedsImageMigration)) return prev;
+        return { ...prev, noteNodes: result.next };
+      });
+      console.log(`[image-migrate] migrated ${result.migrated} notes (working_on)`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workingOn.loaded, workingOn.data.noteNodes, workingOn.setData]);
+
+  useEffect(() => {
+    if (!allIssuesBoard.loaded) return;
+    if (!allIssuesBoard.data.noteNodes.some(noteNeedsImageMigration)) return;
+    let cancelled = false;
+    (async () => {
+      const result = await migrateImageNotes(allIssuesBoard.data.noteNodes);
+      if (cancelled || result.migrated === 0) return;
+      allIssuesBoard.setData((prev) => {
+        if (!prev.noteNodes.some(noteNeedsImageMigration)) return prev;
+        return { ...prev, noteNodes: result.next };
+      });
+      console.log(`[image-migrate] migrated ${result.migrated} notes (all_issues)`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [allIssuesBoard.loaded, allIssuesBoard.data.noteNodes, allIssuesBoard.setData]);
+
+  useEffect(() => {
+    if (!customBoard.loaded) return;
+    if (!customBoard.data.noteNodes.some(noteNeedsImageMigration)) return;
+    let cancelled = false;
+    (async () => {
+      const result = await migrateImageNotes(customBoard.data.noteNodes);
+      if (cancelled || result.migrated === 0) return;
+      customBoard.setData((prev) => {
+        if (!prev.noteNodes.some(noteNeedsImageMigration)) return prev;
+        return { ...prev, noteNodes: result.next };
+      });
+      console.log(`[image-migrate] migrated ${result.migrated} notes (custom)`);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [customBoard.loaded, customBoard.data.noteNodes, customBoard.setData]);
+
+  // Boot-time orphan sweep: scan `<data>/images/` for files that are both
+  // unreferenced by any board JSON AND older than 7 days. Single-shot per
+  // app launch (the ref guard means switching tabs doesn't re-trigger it).
+  // The Rust side does all the work — we just need to wait until at least
+  // one board has loaded (so we know the data dir is ready and writeable).
+  const imageCleanupRanRef = useRef(false);
+  useEffect(() => {
+    if (imageCleanupRanRef.current) return;
+    if (!workingOn.loaded && !allIssuesBoard.loaded && !customBoard.loaded) return;
+    imageCleanupRanRef.current = true;
+    cleanupOrphanImages()
+      .then((n) => console.log(`[image-cleanup] deleted ${n} orphan image file(s)`))
+      .catch((err) => console.error("[image-cleanup] failed", err));
+  }, [workingOn.loaded, allIssuesBoard.loaded, customBoard.loaded]);
 
   // Auto-refresh snapshot while on agent_tmp view so agent comments show up
   // without manual refresh. 10s is gentle on Linear's rate limit and matches
