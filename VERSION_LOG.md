@@ -1,5 +1,11 @@
 # Version Log
 
+- [2026-05-20 10:38] v0.35.0 — up/down 纵向间距滑块 + 复制粘贴改进 + 画布最大缩放 1.2→2 + 切方向整画布 tidy
+  - 画布底部滑块（160-700 px，默认 240，存 localStorage），只在存在 up/down 树时显示；拖动实时重 tidy，长卡片自动加 40 px clearance 避免重叠
+  - 复制 up/down 树粘贴后保留 direction；位置算法优先视野内不重叠的候选偏移，找不到就视野中心；粘贴自动多选整组方便拖动
+  - 切 root 方向后跑 tidyAllRoots 而不是单树，邻居树跟着重排不重叠
+  - 画布最大缩放从 1.2 提到 2（zoom in 看长 note 内容更清楚）
+
 - [2026-05-19 19:29] v0.34.0 — mindmap 根节点 4 向生长 (右/左/上/下)
   - 每棵树根节点可独立设方向，右键 root 选 Right/Left/Up/Down；Tab 插入、F/Shift+F tidy、edge stem 全部跟着方向走；旧 board 缺字段默认 right
 

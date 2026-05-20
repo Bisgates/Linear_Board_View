@@ -58,15 +58,21 @@ interface DataLike {
 /** Mindmap growth direction. Default everywhere is "right". */
 export type RootDirection = "right" | "left" | "up" | "down";
 
+/** Top-left-to-top-left vertical stride for up/down trees. Exported so
+ *  callers (e.g. the canvas slider) can use it as a baseline default. */
+export const DEFAULT_VERTICAL_STRIDE = 240;
+
 export interface LayoutConfig {
   /** Gap from parent's leading edge to child's leading edge along the
-   *  primary axis (parent → child direction). */
+   *  primary axis (parent → child direction). x-axis only. */
   childDx: number;
   /** Step between successive siblings along the stack axis. */
   siblingDy: number;
   /** Default w/h when a node has no measured size yet. */
   defaultW: number;
   defaultH: number;
+  /** Top-left-to-top-left vertical stride for up/down trees. */
+  verticalStride?: number;
 }
 
 export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
@@ -74,6 +80,7 @@ export const DEFAULT_LAYOUT_CONFIG: LayoutConfig = {
   siblingDy: 140,
   defaultW: 280,
   defaultH: 110,
+  verticalStride: DEFAULT_VERTICAL_STRIDE,
 };
 
 /** Arrow-key navigation direction — reuses RootDirection's vocabulary. */
@@ -129,6 +136,11 @@ function frameOf(dir: RootDirection): Frame {
       return { primary: "y", stack: "x", primarySign: -1 };
   }
 }
+
+// Overlap-protection clearance: even when the user pulls verticalStride
+// very small, a card's leading edge always sits at least this far from
+// the adjacent neighbor's far edge.
+const MIN_VERT_CLEARANCE = 40;
 
 /**
  * Climb incoming edges from `id` until a node with no incoming edge is found.
@@ -246,9 +258,31 @@ export function computeChildPos(
     .map((id) => getNode(id, nodes))
     .filter((n): n is NodeGeo => Boolean(n));
 
-  // Primary coord: parent + sign * childDx.
+  // Primary coord:
+  //  - x axis: legacy depth stride (parent + sign * childDx).
+  //  - y axis: stride = max(VERTICAL_STRIDE, neighbor h + MIN_VERT_CLEARANCE).
+  //    For down, "neighbor" = parent (its bottom must clear). For up,
+  //    "neighbor" = new child (its bottom must clear parent's top).
   const parentPrimary = f.primary === "x" ? parent.x : parent.y;
-  const newPrimary = parentPrimary + f.primarySign * config.childDx;
+  let newPrimary: number;
+  if (f.primary === "x") {
+    newPrimary = parentPrimary + f.primarySign * config.childDx;
+  } else if (f.primarySign === 1) {
+    const parentExt = parent.h ?? config.defaultH;
+    const stride = Math.max(
+      config.verticalStride ?? DEFAULT_VERTICAL_STRIDE,
+      parentExt + MIN_VERT_CLEARANCE,
+    );
+    newPrimary = parentPrimary + stride;
+  } else {
+    // new child has no measured size yet — assume default.
+    const childExt = config.defaultH;
+    const stride = Math.max(
+      config.verticalStride ?? DEFAULT_VERTICAL_STRIDE,
+      childExt + MIN_VERT_CLEARANCE,
+    );
+    newPrimary = parentPrimary - stride;
+  }
 
   // Stack coord: parent's stack coord, or step past the last child along
   // the stack axis.
@@ -368,6 +402,8 @@ export interface TidyConfig {
   rootGapY: number;
   defaultW: number;
   defaultH: number;
+  /** Top-left-to-top-left vertical stride for up/down trees. */
+  verticalStride?: number;
 }
 
 export const DEFAULT_TIDY_CONFIG: TidyConfig = {
@@ -376,6 +412,7 @@ export const DEFAULT_TIDY_CONFIG: TidyConfig = {
   rootGapY: 200,
   defaultW: 280,
   defaultH: 110,
+  verticalStride: DEFAULT_VERTICAL_STRIDE,
 };
 
 /** Position update for a single node id, in absolute flow coordinates. */
@@ -504,16 +541,47 @@ export function tidySubtree(
   const stackExtent = (geo: NodeGeo | undefined): number =>
     (f.stack === "x" ? geo?.w : geo?.h) ??
     (f.stack === "x" ? config.defaultW : config.defaultH);
+  const primaryExtent = (geo: NodeGeo | undefined): number =>
+    (f.primary === "x" ? geo?.w : geo?.h) ??
+    (f.primary === "x" ? config.defaultW : config.defaultH);
 
-  // Recurse in the (p, s) local frame:
-  //  - p = depth * hSpacing * primarySign (depth 0 = root, then ± hSpacing).
-  //  - s = cursor along stack axis.
-  // Each node's local top-left in (p, s) is (p, s); we project to (x, y)
-  // at the very end depending on (primary, stack).
-  const place = (id: string, depth: number, topS: number): PlaceResult => {
+  // Recurse in the (p, s) local frame.
+  //   p (primary axis): for x-axis trees uses the legacy depth stride
+  //     (depth * hSpacing * sign). For y-axis trees uses parent-relative
+  //     edge-to-edge: parent's trailing edge + PRIMARY_GAP_Y (or mirror).
+  //   s (stack axis): running cursor.
+  // Local top-left = (p, s); projected to (x, y) at the very end.
+  const place = (
+    id: string,
+    depth: number,
+    parentP: number | null,
+    parentPExt: number,
+    topS: number,
+  ): PlaceResult => {
     const geo = getNode(id, nodes);
     const sExt = stackExtent(geo);
-    const p = depth * config.hSpacing * f.primarySign;
+    const pExt = primaryExtent(geo);
+
+    let p: number;
+    if (parentP === null) {
+      p = 0; // root sits at the frame origin
+    } else if (f.primary === "x") {
+      p = depth * config.hSpacing * f.primarySign;
+    } else if (f.primarySign === 1) {
+      // down: parent.bottom must clear before child top.
+      const stride = Math.max(
+        config.verticalStride ?? DEFAULT_VERTICAL_STRIDE,
+        parentPExt + MIN_VERT_CLEARANCE,
+      );
+      p = parentP + stride;
+    } else {
+      // up: child sits above parent; child's own bottom must clear parent.top.
+      const stride = Math.max(
+        config.verticalStride ?? DEFAULT_VERTICAL_STRIDE,
+        pExt + MIN_VERT_CLEARANCE,
+      );
+      p = parentP - stride;
+    }
 
     const kids = childrenMap.get(id) ?? [];
 
@@ -528,7 +596,7 @@ export function tidySubtree(
     let firstChildCenterS: number | null = null;
     let lastChildCenterS = 0;
     for (const kid of kids) {
-      const r = place(kid, depth + 1, cursor);
+      const r = place(kid, depth + 1, p, pExt, cursor);
       if (firstChildCenterS === null) firstChildCenterS = r.centerS;
       lastChildCenterS = r.centerS;
       cursor = r.subtreeEndS + config.vSpacing;
@@ -543,7 +611,7 @@ export function tidySubtree(
     return { centerS: parentCenterS, subtreeEndS };
   };
 
-  place(rootId, 0, 0);
+  place(rootId, 0, null, 0, 0);
 
   // Translate so the root's top-left equals its original (x, y).
   const rootLocal = tempPositions.get(rootId)!;

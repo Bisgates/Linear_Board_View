@@ -35,6 +35,7 @@ import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clip
 import {
   DEFAULT_LAYOUT_CONFIG,
   DEFAULT_TIDY_CONFIG,
+  DEFAULT_VERTICAL_STRIDE,
   computeChildPos,
   computeSiblingPos,
   findAllRoots,
@@ -43,9 +44,16 @@ import {
   tidyAllRoots,
   tidySubtree,
   type Direction,
+  type LayoutConfig,
   type NodeGeo,
+  type TidyConfig,
   type TidyMove,
 } from "../lib/mindmapLayout";
+
+const VSTRIDE_STORAGE_KEY = "linear_board_view:vstride:v1";
+const VSTRIDE_MIN = 160;
+const VSTRIDE_MAX = 700;
+const VSTRIDE_STEP = 10;
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -744,6 +752,59 @@ function BoardInner({
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  // User-tunable y-stride for up/down trees. Loaded once from localStorage,
+  // saved on every change. Layout configs below are memoized against it.
+  const [vStride, setVStrideState] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(VSTRIDE_STORAGE_KEY);
+      if (raw) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n >= VSTRIDE_MIN && n <= VSTRIDE_MAX) return n;
+      }
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_VERTICAL_STRIDE;
+  });
+  const layoutConfig = useMemo<LayoutConfig>(
+    () => ({ ...DEFAULT_LAYOUT_CONFIG, verticalStride: vStride }),
+    [vStride],
+  );
+  const tidyConfig = useMemo<TidyConfig>(
+    () => ({ ...DEFAULT_TIDY_CONFIG, verticalStride: vStride }),
+    [vStride],
+  );
+  // Setter that updates state, persists, AND immediately re-tidies all roots
+  // so the user sees the new spacing as they drag the slider.
+  const setVStride = useCallback((next: number) => {
+    setVStrideState(next);
+    try {
+      localStorage.setItem(VSTRIDE_STORAGE_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+    const geoFn = getNodeGeosRef.current;
+    const applyFn = applyTidyMovesRef.current;
+    if (!geoFn || !applyFn) return;
+    const moves = tidyAllRoots(
+      geoFn(),
+      dataRef.current.edges,
+      { ...DEFAULT_TIDY_CONFIG, verticalStride: next },
+      dataRef.current.rootDirections,
+    );
+    if (moves.length > 0) applyFn(moves);
+  }, []);
+  // Slider only renders when at least one tree grows up/down — for a board
+  // of right-only trees the y-stride knob has no effect.
+  const hasVerticalTree = useMemo(() => {
+    const dirs = data.rootDirections;
+    if (!dirs) return false;
+    for (const k of Object.keys(dirs)) {
+      const v = dirs[k];
+      if (v === "up" || v === "down") return true;
+    }
+    return false;
+  }, [data.rootDirections]);
   // Board-level keyboard focus — the card that arrow keys / Space / Tab /
   // Shift+Tab act on. Distinct from `selectedIssueId` (which gates the
   // right-hand DetailPanel): arrow nav moves the halo without opening any
@@ -768,6 +829,11 @@ function BoardInner({
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
+  // Paste sets this just before setData; the nodes-rebuild useEffect (which
+  // runs synchronously after data updates) consumes it to set selection on
+  // the newly-pasted ids. Cleared once consumed. More reliable than a RAF
+  // because the rebuild reads pending → applies in the same commit.
+  const pendingSelectionRef = useRef<Set<string> | null>(null);
   const [linking, setLinking] = useState<
     { mode: "off" } | { mode: "source" } | { mode: "target"; source: string }
   >({ mode: "off" });
@@ -853,6 +919,13 @@ function BoardInner({
     setNodes((current) => {
       const selectedIds = new Set(current.filter((n) => n.selected).map((n) => n.id));
       const built = buildNodes(displayedIssues, data, initialPositions, editingNoteId, focusedCardId, issueNodeType);
+      // Paste hand-off: if the paste handler queued a "select these and only
+      // these" set, honor it and skip preserving the old selection.
+      const pending = pendingSelectionRef.current;
+      if (pending) {
+        pendingSelectionRef.current = null;
+        return built.map((n) => (pending.has(n.id) ? { ...n, selected: true } : n));
+      }
       if (selectedIds.size === 0) return built;
       return built.map((n) => (selectedIds.has(n.id) ? { ...n, selected: true } : n));
     });
@@ -1321,7 +1394,7 @@ function BoardInner({
               const moves = tidyAllRoots(
                 geoFn(),
                 dataRef.current.edges,
-                DEFAULT_TIDY_CONFIG,
+                tidyConfig,
                 dataRef.current.rootDirections,
               );
               if (moves.length > 0) applyFn(moves);
@@ -1766,7 +1839,7 @@ function BoardInner({
             focusId,
             geos,
             edges,
-            DEFAULT_TIDY_CONFIG,
+            tidyConfig,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1775,7 +1848,7 @@ function BoardInner({
           const moves = tidyAllRoots(
             geos,
             edges,
-            DEFAULT_TIDY_CONFIG,
+            tidyConfig,
             dataRef.current.rootDirections,
           );
           if (moves.length > 0) applyTidyMoves(moves);
@@ -1902,7 +1975,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            DEFAULT_LAYOUT_CONFIG,
+            layoutConfig,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -1919,7 +1992,7 @@ function BoardInner({
             focusId,
             dataRef.current,
             geos,
-            DEFAULT_LAYOUT_CONFIG,
+            layoutConfig,
             dataRef.current.rootDirections,
           );
           if (!p) return;
@@ -1967,7 +2040,7 @@ function BoardInner({
           const movesAll = tidyAllRoots(
             geosAtTidy,
             dataRef.current.edges,
-            DEFAULT_TIDY_CONFIG,
+            tidyConfig,
             dataRef.current.rootDirections,
           );
           if (movesAll.length > 0) applyTidyMoves(movesAll);
@@ -2112,16 +2185,114 @@ function BoardInner({
       let skippedIssues = 0;
       let addedIssues = 0;
       let addedNotes = 0;
+      // Captured outside setData so the post-commit selection sync can read
+      // which ids it should highlight.
+      const newlyAddedIds = new Set<string>();
 
       setData((prev) => {
         const issueMembers = { ...prev.issueMembers };
         const noteNodes = [...prev.noteNodes];
         const existingNoteIds = new Set(noteNodes.map((n) => n.id));
         const addedNodeIds = new Set<string>();
+        const rootDirections: Record<string, RootDirection> = {
+          ...(prev.rootDirections ?? {}),
+        };
 
-        payload.items.forEach((it, idx) => {
+        // ---- Position selection ---------------------------------------
+        // Try the viewport-center anchor first. If the pasted bbox would
+        // overlap any existing card, try shifting through a small set of
+        // candidate offsets, each constrained to keep the pasted bbox
+        // inside the current viewport. If nothing clears, fall back to
+        // (0, 0) — overlap is tolerable because the paste auto-selects
+        // and the user can drag the group out (per user's explicit ask:
+        // visible > non-overlapping).
+        const W = DEFAULT_LAYOUT_CONFIG.defaultW;
+        const H = DEFAULT_LAYOUT_CONFIG.defaultH;
+        let pastedMinX = Infinity;
+        let pastedMaxX = -Infinity;
+        let pastedMinY = Infinity;
+        let pastedMaxY = -Infinity;
+        for (const it of payload.items) {
           const x = center.x + it.dx;
           const y = center.y + it.dy;
+          if (x < pastedMinX) pastedMinX = x;
+          if (x + W > pastedMaxX) pastedMaxX = x + W;
+          if (y < pastedMinY) pastedMinY = y;
+          if (y + H > pastedMaxY) pastedMaxY = y + H;
+        }
+        const existingRects: Array<{ x: number; y: number; w: number; h: number }> = [];
+        for (const n of prev.noteNodes) {
+          existingRects.push({ x: n.x, y: n.y, w: W, h: H });
+        }
+        for (const pos of Object.values(prev.issueMembers)) {
+          existingRects.push({ x: pos.x, y: pos.y, w: W, h: H });
+        }
+        const rectsOverlap = (
+          a: { x: number; y: number; w: number; h: number },
+          minX: number,
+          minY: number,
+          maxX: number,
+          maxY: number,
+        ) => a.x < maxX && a.x + a.w > minX && a.y < maxY && a.y + a.h > minY;
+        // Viewport bbox in flow coords (so candidate positions stay visible).
+        const vpTopLeft = reactFlow.screenToFlowPosition(
+          rect
+            ? { x: rect.left, y: rect.top }
+            : { x: 0, y: 0 },
+        );
+        const vpBotRight = reactFlow.screenToFlowPosition(
+          rect
+            ? { x: rect.right, y: rect.bottom }
+            : { x: window.innerWidth, y: window.innerHeight },
+        );
+        const PASTE_GAP = 80;
+        const stepX = W + PASTE_GAP;
+        const stepY = H + PASTE_GAP;
+        const candidates: Array<{ dx: number; dy: number }> = [
+          { dx: 0, dy: 0 },
+          { dx: stepX, dy: 0 },
+          { dx: 0, dy: stepY },
+          { dx: -stepX, dy: 0 },
+          { dx: 0, dy: -stepY },
+          { dx: stepX, dy: stepY },
+          { dx: -stepX, dy: stepY },
+          { dx: stepX, dy: -stepY },
+          { dx: -stepX, dy: -stepY },
+          { dx: 2 * stepX, dy: 0 },
+          { dx: 0, dy: 2 * stepY },
+          { dx: -2 * stepX, dy: 0 },
+          { dx: 0, dy: -2 * stepY },
+        ];
+        let shiftX = 0;
+        let shiftY = 0;
+        for (const c of candidates) {
+          const minX = pastedMinX + c.dx;
+          const maxX = pastedMaxX + c.dx;
+          const minY = pastedMinY + c.dy;
+          const maxY = pastedMaxY + c.dy;
+          // Keep pasted bbox inside the viewport (with a half-card slack
+          // so we don't reject candidates that are flush to the edge).
+          const SLACK = W / 2;
+          if (
+            minX < vpTopLeft.x - SLACK ||
+            maxX > vpBotRight.x + SLACK ||
+            minY < vpTopLeft.y - SLACK ||
+            maxY > vpBotRight.y + SLACK
+          ) {
+            continue;
+          }
+          const collides = existingRects.some((r) =>
+            rectsOverlap(r, minX, minY, maxX, maxY),
+          );
+          if (collides) continue;
+          shiftX = c.dx;
+          shiftY = c.dy;
+          break;
+        }
+
+        payload.items.forEach((it, idx) => {
+          const x = center.x + it.dx + shiftX;
+          const y = center.y + it.dy + shiftY;
           if (it.kind === "issue") {
             if (issueMembers[it.id]) {
               skippedIssues += 1;
@@ -2130,7 +2301,9 @@ function BoardInner({
             }
             issueMembers[it.id] = { x, y };
             addedNodeIds.add(it.id);
+            newlyAddedIds.add(it.id);
             addedIssues += 1;
+            if (it.direction) rootDirections[it.id] = it.direction;
           } else {
             let id = localIdxToNewId[idx];
             if (!id || existingNoteIds.has(id)) {
@@ -2150,7 +2323,9 @@ function BoardInner({
             noteNodes.push(note);
             existingNoteIds.add(id);
             addedNodeIds.add(id);
+            newlyAddedIds.add(id);
             addedNotes += 1;
+            if (it.direction) rootDirections[id] = it.direction;
           }
         });
 
@@ -2172,7 +2347,18 @@ function BoardInner({
           issueMembers,
           noteNodes,
           edges: [...prev.edges, ...newEdges],
+          rootDirections,
         };
+      });
+
+      // Post-commit: flip ReactFlow selection so only the pasted cards are
+      // highlighted. User can then drag the whole group to fine-tune position
+      // (they explicitly asked for this auto-select after paste).
+      requestAnimationFrame(() => {
+        if (newlyAddedIds.size === 0) return;
+        reactFlow.setNodes((nodes) =>
+          nodes.map((n) => ({ ...n, selected: newlyAddedIds.has(n.id) })),
+        );
       });
 
       const parts: string[] = [];
@@ -2245,15 +2431,29 @@ function BoardInner({
 
         const items: ClipboardItem[] = [];
         const idToLocalIdx = new Map<string, number>();
+        const rootDirs = dataRef.current.rootDirections ?? {};
         for (const n of selectedNodes) {
           const dx = n.position.x - cx;
           const dy = n.position.y - cy;
+          const dir = rootDirs[n.id];
           if (n.type === "issue") {
-            items.push({ kind: "issue", id: n.id, dx, dy });
+            const item: ClipboardItem = { kind: "issue", id: n.id, dx, dy };
+            if (dir) item.direction = dir;
+            items.push(item);
           } else if (n.type === "note") {
             const note = dataRef.current.noteNodes.find((nn) => nn.id === n.id);
             if (!note) continue;
-            items.push({ kind: "note", body: note.body, color: note.color, working: note.working, done: note.done, dx, dy });
+            const item: ClipboardItem = {
+              kind: "note",
+              body: note.body,
+              color: note.color,
+              working: note.working,
+              done: note.done,
+              dx,
+              dy,
+            };
+            if (dir) item.direction = dir;
+            items.push(item);
           } else {
             continue;
           }
@@ -2583,22 +2783,23 @@ function BoardInner({
         return { ...prev, rootDirections: next };
       });
       // Tidy fires one frame later so the rootDirections update propagates
-      // through React before tidySubtree consults it.
+      // through React before tidy consults it. Use tidyAllRoots so neighbor
+      // subtrees re-stack around the changed tree (its bbox shape just
+      // changed, so a per-tree tidy would leave overlaps).
       requestAnimationFrame(() => {
         const geoFn = getNodeGeosRef.current;
         const applyFn = applyTidyMovesRef.current;
         if (!geoFn || !applyFn) return;
-        const moves = tidySubtree(
-          rootId,
+        const moves = tidyAllRoots(
           geoFn(),
           dataRef.current.edges,
-          DEFAULT_TIDY_CONFIG,
+          tidyConfig,
           dataRef.current.rootDirections,
         );
         if (moves.length > 0) applyFn(moves);
       });
     },
-    [setData],
+    [setData, tidyConfig],
   );
 
   // Each contextMenu handler builds its own item list — adding new rows for a
@@ -2760,7 +2961,7 @@ function BoardInner({
         edgesFocusable
         deleteKeyCode={["Backspace", "Delete"]}
         {...SHARED_FLOW_PROPS}
-        maxZoom={1.2}
+        maxZoom={2}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="rgba(120,116,108,0.38)" />
         <ViewportPortal>
@@ -2915,6 +3116,57 @@ function BoardInner({
           items={menu.items}
           onDismiss={() => setMenu(null)}
         />
+      )}
+      {hasVerticalTree && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 18,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "var(--paper)",
+            border: "1px solid var(--hairline)",
+            borderRadius: 6,
+            padding: "6px 12px",
+            boxShadow: "0 4px 14px rgba(26,24,20,0.18)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            fontFamily: "var(--sans)",
+            fontSize: 11,
+            color: "var(--ink-soft)",
+            zIndex: 25,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 9,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "var(--muted)",
+            }}
+          >
+            ↕ stride
+          </span>
+          <input
+            type="range"
+            min={VSTRIDE_MIN}
+            max={VSTRIDE_MAX}
+            step={VSTRIDE_STEP}
+            value={vStride}
+            onChange={(e) => setVStride(parseInt(e.target.value, 10))}
+            style={{ width: 160 }}
+          />
+          <span
+            style={{
+              minWidth: 32,
+              textAlign: "right",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {vStride}
+          </span>
+        </div>
       )}
     </div>
   );
