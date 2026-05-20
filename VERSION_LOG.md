@@ -1,5 +1,9 @@
 # Version Log
 
+- [2026-05-20 14:50] v0.35.6 — paste 路径合一走 native 事件，去掉 WKWebView 的 "Paste" 系统按钮 + 修粘图后双指变缩放
+  - ⌘V keydown 分支之前调 `navigator.clipboard.read()`，Tauri WKWebView 安全策略会弹 macOS 系统 "Paste" 大按钮要点一下；并且这个按钮抢焦点导致后续 wheel 事件 ctrlKey 状态混乱，两指 pan 变 pinch zoom
+  - 删 keydown 拦截，统一走 native `paste` 事件（同步拿 clipboardData，无权限提示），image/cards 信封/纯文本三条分支都通过 evt.clipboardData 路由
+
 - [2026-05-20 14:39] v0.35.5 — 图片粘贴自动 resize + JPEG 重编码，修单卡 5 MB 拖卡死的性能问题
   - 之前 paste image 只把 `w`/`h` 改成渲染尺寸，原始 base64 PNG 整张存进 BoardData，2000×2200 截图 ≈ 5 MB → 每次 drag tick 都过 React state、save 文件、跳转 board 第一次 paint 都卡
   - canvas 缩到 max 800 px 宽（兼顾 2x zoom 清晰）+ `toDataURL("image/jpeg", 0.85)`，典型 screenshot 5 MB → 50-300 KB

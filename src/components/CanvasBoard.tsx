@@ -2452,55 +2452,36 @@ function BoardInner({
         return;
       }
 
-      // ⌘V — OS clipboard is the only source. preventDefault unconditionally
-      // so WebKit doesn't synthesize a `paste` event into a focused input;
-      // we route to image / cards / plain-text branches ourselves.
-      evt.preventDefault();
-      const dispatchPaste = async () => {
-        // 1. Image branch — `clipboard.read()` exposes image mimes.
-        try {
-          const items = await navigator.clipboard.read();
-          for (const item of items) {
-            const imgType = item.types.find((t) => t.startsWith("image/"));
-            if (!imgType) continue;
-            const blob = await item.getType(imgType);
-            pasteImageBlob(blob);
-            return;
-          }
-        } catch {
-          // clipboard.read can reject (no permission, no image data). Fall
-          // through to text branch.
-        }
-        // 2. Text branch — envelope wins; otherwise paste as a single note.
-        let text = "";
-        try {
-          text = await navigator.clipboard.readText();
-        } catch {
-          return;
-        }
-        if (!text) return;
-        const cards = decodeCardsEnvelope(text);
-        if (cards) {
-          pasteCardsPayload(cards);
-          return;
-        }
-        pasteTextAsNote(text);
-      };
-      void dispatchPaste();
+      // ⌘V — do NOT intercept here. Earlier versions called
+      // `navigator.clipboard.read()` from this keydown branch, which in
+      // Tauri's WKWebView triggers Apple's "Paste" permission overlay (a
+      // big system button the user has to click). The native `paste` event
+      // bound below already has the clipboard data attached synchronously,
+      // no permission prompt, and bubbles from the focused element so
+      // textarea pastes still go where they should. Let it through.
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [reactFlow, onClipboardToast, pasteImageBlob, pasteCardsPayload, pasteTextAsNote]);
 
-  // Paste an image from the system clipboard. Target priority lives in
-  // `pasteImageBlob`. This listener handles non-keyboard paste flows (the
-  // ⌘V keydown branch above intercepts the kbd path and probes the OS
-  // clipboard directly). preventDefault is called only when an image is
-  // found, so plain-text paste into a textarea still works.
+  // Single paste pipeline: ⌘V fires a synthetic native `paste` event with
+  // `clipboardData` already populated by WebKit (no async clipboard.read
+  // call, so no "Paste" permission overlay in Tauri WKWebView). Routes:
+  //   1. Image file → pasteImageBlob, preventDefault
+  //   2. Cards envelope text → pasteCardsPayload, preventDefault
+  //   3. Plain text — only intercept when focus is on the canvas (not a
+  //      textarea / contenteditable), so inline note editing still uses the
+  //      default text insertion path.
   useEffect(() => {
+    const isEditableTarget = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+    };
     const onPaste = (evt: ClipboardEvent) => {
       const dt = evt.clipboardData;
       if (!dt) return;
+      // 1. Image branch — wins over text for clipboard items that carry both.
       let file: File | null = null;
       for (let i = 0; i < dt.items.length; i++) {
         const it = dt.items[i];
@@ -2509,13 +2490,34 @@ function BoardInner({
           break;
         }
       }
-      if (!file) return;
+      if (file) {
+        evt.preventDefault();
+        pasteImageBlob(file);
+        return;
+      }
+      // 2. Cards envelope — text we previously wrote with the prefix.
+      const text = dt.getData("text/plain");
+      if (text) {
+        const cards = decodeCardsEnvelope(text);
+        if (cards) {
+          evt.preventDefault();
+          pasteCardsPayload(cards);
+          return;
+        }
+      }
+      // 3. Plain text fallback. Let WebKit handle pastes into editable
+      // targets natively; only redirect to "paste as a new note" when the
+      // focus is on the bare canvas.
+      if (!text) return;
+      if (isEditableTarget(evt.target) || isEditableTarget(document.activeElement)) {
+        return;
+      }
       evt.preventDefault();
-      pasteImageBlob(file);
+      pasteTextAsNote(text);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [pasteImageBlob]);
+  }, [pasteImageBlob, pasteCardsPayload, pasteTextAsNote]);
 
   // Drag the entire group by grabbing the dashed frame's empty interior
   // (frame sits at zIndex -1 so cards still catch clicks on their own area).
