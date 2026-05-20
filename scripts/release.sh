@@ -84,10 +84,12 @@ read_package_version() {
   node -p "require('$REPO_ROOT/package.json').version"
 }
 
-# Pull the most-recent VERSION_LOG entry's body for a given version. Best-effort:
-# returns the first nested-bullet block following the `- vX.Y.Z` heading. If
-# the entry isn't found, falls back to a one-liner. Output matches the
-# `- vX.Y.Z — title\n  - nested bullet\n  - ...` shape used in VERSION_LOG.md.
+# Pull the VERSION_LOG entry's body for a given version. Best-effort: returns
+# the matched heading + all nested bullets until the next top-level entry.
+# Entry format (set by CLAUDE.md Pride Versioning rules):
+#   - [YYYY-MM-DD HH:MM] vX.Y.Z — title
+#     - nested bullet
+#     - nested bullet
 read_release_notes_for() {
   local version="$1"
   local log="$REPO_ROOT/VERSION_LOG.md"
@@ -96,18 +98,42 @@ read_release_notes_for() {
     return
   fi
   awk -v v="$version" '
-    BEGIN { in_block = 0 }
-    # Top-level version bullet ends/starts a block.
-    /^- v[0-9]+\.[0-9]+\.[0-9]+/ {
+    # Top-level entry boundary: `- [YYYY-MM-DD HH:MM] vX.Y.Z`.
+    /^- \[[-0-9 :]+\] v[0-9]+\.[0-9]+\.[0-9]+/ {
       if (in_block) exit
-      if (index($0, "- v" v " ") == 1 || index($0, "- v" v "—") == 1) {
+      # Match the wanted version, allowing either a space or em-dash after it.
+      if (match($0, "v" v "( |—)")) {
         in_block = 1
         print
         next
       }
     }
     in_block { print }
-  ' "$log" | sed '/^$/d' | head -40
+  ' "$log"
+}
+
+# Refuse to ship if package.json / tauri.conf.json / Cargo.toml versions
+# disagree. Historically these drifted (tauri.conf.json was stuck at 0.26.2
+# for ~10 releases while package.json marched forward), so .app's
+# CFBundleShortVersionString lied and the in-app updater showed "v0.26.2 →
+# v<latest>" forever. Catch the drift before we build.
+assert_version_triplet_aligned() {
+  local pkg
+  pkg="$(node -p "require('$REPO_ROOT/package.json').version")"
+  local conf
+  conf="$(node -p "JSON.parse(require('fs').readFileSync('$REPO_ROOT/src-tauri/tauri.conf.json','utf8')).version")"
+  local cargo
+  cargo="$(awk -F\" '/^version[[:space:]]*=/ { print $2; exit }' "$REPO_ROOT/src-tauri/Cargo.toml")"
+  if [ "$pkg" != "$conf" ] || [ "$pkg" != "$cargo" ]; then
+    cat >&2 <<EOF
+release.sh: version mismatch — refusing to build.
+  package.json          $pkg
+  src-tauri/tauri.conf.json  $conf
+  src-tauri/Cargo.toml  $cargo
+fix all three to the same vX.Y.Z (and add a VERSION_LOG.md entry) before re-running.
+EOF
+    exit 1
+  fi
 }
 
 # Convert "Linear Board" -> the URL-safe form GitHub uses for asset filenames
@@ -119,6 +145,8 @@ asset_url_basename() {
 
 release_prod() {
   echo ">> prod release"
+
+  assert_version_triplet_aligned
 
   # Validate signing env early — `tauri build` with `createUpdaterArtifacts:
   # true` will fail otherwise, but failing here gives a clearer error message.

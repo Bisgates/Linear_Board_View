@@ -1,5 +1,10 @@
 # Version Log
 
+- [2026-05-20 16:59] v0.36.1 — 修 updater "上一版本永远显示 v0.26.2" + 更新说明空缺 + UpdaterModal 视觉重做
+  - tauri.conf.json + Cargo.toml 的 version 历次没跟 package.json 同步，CFBundleShortVersionString 锁在 0.26.2 误导了 ~10 个版本；release.sh 加 version triplet 一致性 guard，三处不齐直接 die
+  - release.sh 读取 VERSION_LOG 条目的 awk regex 没匹配实际格式 `- [time] vX.Y.Z`，notes 一直走 fallback "Release vX.Y.Z" 空话；regex 修对后 in-app updater 弹窗能看到具体改动说明
+  - UpdaterModal 重做：版本号改成左灰右深的 chip 对比、"更新说明"用左侧色条 + 行距更舒服、backdrop 加 blur、按钮 hover 反馈
+
 - [2026-05-20 15:17] v0.36.0 — 图片改成 markdown 文本引用 + 磁盘文件，去重 + 启动孤儿清理
   - 粘贴的图片不再 inline base64 进 board JSON，而是 sha256 命名落盘 `<data>/images/<hash>.jpg`，body 里只留 `![](hash.jpg)` 的 markdown ref；同一张图粘多次自动指向同一文件
   - 删掉四角拖拽 resize 和 NoteImage[]/textSegments[] 交错结构，note 现在就是单 textarea + 单 body 字符串
