@@ -130,6 +130,16 @@ export function deleteCustomViewBoard(viewId: string): Promise<void> {
   return invoke<void>("delete_custom_view_board", { viewId });
 }
 
+// --- Pinned tabs (top-bar chip strip — survives bundle replacement that
+// can wipe per-bundle WebKit localStorage) ---
+export function readPinnedTabs(): Promise<{ order: string[] }> {
+  return invoke<{ order: string[] }>("read_pinned_tabs");
+}
+
+export function writePinnedTabs(order: string[]): Promise<void> {
+  return invoke<void>("write_pinned_tabs", { order });
+}
+
 // --- All-issues board ---
 export function readAllIssuesBoard(): Promise<BoardData> {
   return invoke<BoardData>("read_all_issues_board");
