@@ -470,6 +470,24 @@ export default function App() {
   }, [cv.manifest, cv.activeId]);
 
   const handleCreate = useCallback(async () => {
+    // Only one day view per day: if a view already exists for today
+    // (name prefix `YYYY-MM-DD `), reuse it instead of stacking duplicates
+    // like `… (2)`, `… (3)`. Historical days with multiple views from older
+    // app versions stay untouched — we only gate fresh creation for today.
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const todayPrefix = `${yyyy}-${mm}-${dd}`;
+    const existingToday = wov.manifest?.views.find(
+      (v) => v.name === todayPrefix || v.name.startsWith(`${todayPrefix} `),
+    );
+    if (existingToday) {
+      wov.setActiveId(existingToday.id);
+      setActiveView("working_on");
+      pushToast("info", `今日 day view 已存在，已切换到 "${existingToday.name}"`);
+      return;
+    }
     const newId = await wov.createView();
     if (newId) {
       setActiveView("working_on");
