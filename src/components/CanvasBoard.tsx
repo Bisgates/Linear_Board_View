@@ -47,6 +47,11 @@ import {
   type NodeGeo,
   type TidyMove,
 } from "../lib/mindmapLayout";
+import {
+  computeGraphNodeIds,
+  pickShortestHandlePair,
+  type HandlePair,
+} from "../lib/graphMode";
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -204,6 +209,12 @@ function buildNodes(
 
 // Default edge color, used as fallback when no preset is specified
 const DEFAULT_EDGE_COLOR = "var(--edge)"; // see --edge in src/index.css
+
+// Graph-mode edges: a freshly computed shortest handle pair must beat the
+// currently assigned pair by at least this many pixels before the connection
+// point switches sides — prevents flicker while a card is dragged along a
+// near-equidistant diagonal.
+const GRAPH_HANDLE_HYSTERESIS_PX = 8;
 
 // Snap-to-align: when a node is dragged within SNAP_THRESHOLD of another node's
 // left / centre / right (X) or top / middle / bottom (Y) line, the dragged
@@ -796,6 +807,7 @@ function BoardInner({
   const getNodeGeosRef = useRef<(() => NodeGeo[]) | null>(null);
   const applyTidyMovesRef = useRef<((moves: TidyMove[]) => void) | null>(null);
   const reactFlow = useReactFlow();
+
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   useImperativeHandle(
@@ -845,6 +857,43 @@ function BoardInner({
     for (const i of displayedIssues) m.set(i.id, i);
     return m;
   }, [displayedIssues]);
+
+  // Graph-mode domain membership — THE single selector every consumer reads
+  // (context-menu Graph toggle / Direction hiding, graph edge rendering, and
+  // the F / Shift+F tidy exemption). Recomputed only when the board's node
+  // set, edges or flags change — never on drag ticks.
+  const graphNodeIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const n of data.noteNodes) ids.push(n.id);
+    for (const id of Object.keys(data.issueMembers)) ids.push(id);
+    // Issues displayed without an explicit stored position (e.g. all-issues
+    // grid fallback) are still nodes that edges can reference.
+    for (const i of displayedIssues) {
+      if (!data.issueMembers[i.id]) ids.push(i.id);
+    }
+    return computeGraphNodeIds(ids, data.edges, data.graphFlags);
+  }, [data.noteNodes, data.issueMembers, data.edges, data.graphFlags, displayedIssues]);
+  // Ref mirror for the global keydown listener (F / Shift+F) and the RAF
+  // tidy callbacks, which must read the latest set without rebinding.
+  const graphNodeIdsRef = useRef(graphNodeIds);
+  useEffect(() => {
+    graphNodeIdsRef.current = graphNodeIds;
+  }, [graphNodeIds]);
+
+  // Toggle THIS card's graph flag (domain membership is derived, the flag is
+  // per-node). Flows through setData so it lands in undo/redo snapshots and
+  // the debounced board save like any other board mutation.
+  const toggleGraphFlag = useCallback(
+    (id: string) => {
+      setData((prev) => {
+        const flags: Record<string, true> = { ...(prev.graphFlags ?? {}) };
+        if (flags[id]) delete flags[id];
+        else flags[id] = true;
+        return { ...prev, graphFlags: flags };
+      });
+    },
+    [setData],
+  );
 
   // Rebuild nodes when data shape changes (counts / contents) or when the
   // halo / edit target moves. `selected` and `autoEdit` are baked in by
@@ -1062,16 +1111,65 @@ function BoardInner({
     });
   }, [nodes, dropTargetId, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
 
+  // Per-edge currently-assigned handle pair, kept across renders so the 8px
+  // hysteresis in pickShortestHandlePair has a "current" to compare against.
+  // Render-layer only — never written back to BoardData.edges.
+  const graphHandlePairsRef = useRef(new Map<string, HandlePair>());
+
   const decoratedEdges = useMemo(() => {
-    return edges.map((e) => ({
-      ...e,
-      data: {
-        ...(e.data ?? {}),
-        onCommit: (label: string) => commitEdgeLabel(e.id, label),
-        onEditEnd: edgeEditingFinished,
-      } as Record<string, unknown>,
-    }));
-  }, [edges, commitEdgeLabel, edgeEditingFinished]);
+    // Live node geometry (positions update every drag tick via onNodesChange,
+    // so graph edges re-pick their shortest handle pair while dragging).
+    const nodeById = new Map<string, Node>();
+    for (const n of nodes) nodeById.set(n.id, n);
+    const pairs = graphHandlePairsRef.current;
+    const liveGraphEdgeIds = new Set<string>();
+
+    const out = edges.map((e) => {
+      const isGraph = graphNodeIds.has(e.source) && graphNodeIds.has(e.target);
+      let graphOverride: Partial<Edge> = {};
+      if (isGraph) {
+        const sn = nodeById.get(e.source);
+        const tn = nodeById.get(e.target);
+        if (sn && tn) {
+          liveGraphEdgeIds.add(e.id);
+          const { w: sw, h: sh } = nodeSize(sn);
+          const { w: tw, h: th } = nodeSize(tn);
+          const pair = pickShortestHandlePair(
+            { x: sn.position.x, y: sn.position.y, w: sw, h: sh },
+            { x: tn.position.x, y: tn.position.y, w: tw, h: th },
+            pairs.get(e.id),
+            GRAPH_HANDLE_HYSTERESIS_PX,
+          );
+          pairs.set(e.id, pair);
+          graphOverride = { sourceHandle: pair.s, targetHandle: pair.t };
+        }
+        // Finalized graph look (winner of the candidate bake-off): warm-gray
+        // stroke matching the tree edges but slightly thinner (1.4 vs 1.6px),
+        // solid line, closed arrowhead. The path shape (perpendicular bezier)
+        // lives in LabeledEdge's graph branch.
+        graphOverride.style = {
+          stroke: DEFAULT_EDGE_COLOR,
+          strokeWidth: 1.4,
+        } as React.CSSProperties;
+      }
+      return {
+        ...e,
+        ...graphOverride,
+        data: {
+          ...(e.data ?? {}),
+          graph: isGraph,
+          onCommit: (label: string) => commitEdgeLabel(e.id, label),
+          onEditEnd: edgeEditingFinished,
+        } as Record<string, unknown>,
+      };
+    });
+
+    // Drop hysteresis state for edges that left graph mode / were deleted.
+    for (const id of [...pairs.keys()]) {
+      if (!liveGraphEdgeIds.has(id)) pairs.delete(id);
+    }
+    return out;
+  }, [edges, nodes, graphNodeIds, commitEdgeLabel, edgeEditingFinished]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -1330,6 +1428,7 @@ function BoardInner({
                 dataRef.current.edges,
                 DEFAULT_TIDY_CONFIG,
                 dataRef.current.rootDirections,
+                graphNodeIdsRef.current,
               );
               if (moves.length > 0) applyFn(moves);
             });
@@ -1769,6 +1868,12 @@ function BoardInner({
             onClipboardToast?.("info", "请先选中一张卡片，再按 Shift+F 整理它所在的子树（或 F 整理全画布）");
             return;
           }
+          // Graph-domain exemption: tree tidy is meaningless (and wrong) for
+          // a graph — no-op when the focused card lives in a graph domain.
+          if (graphNodeIdsRef.current.has(focusId)) {
+            console.log(`[canvas-board] → Shift+F no-op (${focusId} is in a graph domain)`);
+            return;
+          }
           const moves = tidySubtree(
             focusId,
             geos,
@@ -1779,14 +1884,17 @@ function BoardInner({
           if (moves.length > 0) applyTidyMoves(moves);
           console.log(`[canvas-board] → tidy SUBTREE from ${focusId}: ${moves.length} moves (this card stays pinned, descendants reflow)`);
         } else {
+          // Graph domains are excluded wholesale: their cards neither move
+          // nor act as obstacles for the vertical root stacking.
           const moves = tidyAllRoots(
             geos,
             edges,
             DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
+            graphNodeIdsRef.current,
           );
           if (moves.length > 0) applyTidyMoves(moves);
-          console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots`);
+          console.log(`[canvas-board] → tidy ALL: ${moves.length} moves over ${findAllRoots(geos, edges).length} roots (graph-domain cards excluded: ${graphNodeIdsRef.current.size})`);
         }
         return;
       }
@@ -1976,6 +2084,7 @@ function BoardInner({
             dataRef.current.edges,
             DEFAULT_TIDY_CONFIG,
             dataRef.current.rootDirections,
+            graphNodeIdsRef.current,
           );
           if (movesAll.length > 0) applyTidyMoves(movesAll);
           if (!newId || !placement) return;
@@ -2805,6 +2914,7 @@ function BoardInner({
           dataRef.current.edges,
           DEFAULT_TIDY_CONFIG,
           dataRef.current.rootDirections,
+          graphNodeIdsRef.current,
         );
         if (moves.length > 0) applyFn(moves);
       });
@@ -2819,6 +2929,9 @@ function BoardInner({
       evt.preventDefault();
       const { x, y } = localCoords(evt);
       const items: MenuItem[] = [];
+      // Domain-level graph membership — read from the single selector so the
+      // checkmark always matches what the edge renderer / F exemption see.
+      const inGraphDomain = graphNodeIds.has(node.id);
       if (node.type === "note") {
         const note = dataRef.current.noteNodes.find((n) => n.id === node.id);
         if (note?.cardId) {
@@ -2835,6 +2948,15 @@ function BoardInner({
           tone: "danger",
           onSelect: () => deleteNote(node.id),
         });
+        // Graph toggle — ✓ when this card's connected component is rendered
+        // as a graph (any member flagged). Clicking toggles THIS card's flag.
+        items.push({
+          id: "graph-toggle",
+          label: "Graph",
+          checked: inGraphDomain,
+          separatorAbove: true,
+          onSelect: () => toggleGraphFlag(node.id),
+        });
       } else {
         items.push({
           id: "remove-issue",
@@ -2848,8 +2970,10 @@ function BoardInner({
       // current direction (default "right") and shows it with a leading ✓.
       // Clicking a row writes back the new direction and re-tidies the
       // subtree synchronously so the user sees the new axis immediately.
+      // Hidden entirely when the card's domain is a graph — growth direction
+      // is a tree concept and means nothing for graph rendering.
       const hasIncoming = dataRef.current.edges.some((e) => e.target === node.id);
-      if (!hasIncoming) {
+      if (!hasIncoming && !inGraphDomain) {
         const cur: RootDirection = dataRef.current.rootDirections?.[node.id] ?? "right";
         const dirItems: { id: string; label: string; dir: RootDirection }[] = [
           { id: "dir-right", label: "Direction: Right", dir: "right" },
@@ -2870,7 +2994,7 @@ function BoardInner({
 
       setMenu({ x, y, items });
     },
-    [localCoords, copyCardId, deleteNote, removeIssueFromBoard, setRootDirection],
+    [localCoords, copyCardId, deleteNote, removeIssueFromBoard, setRootDirection, graphNodeIds, toggleGraphFlag],
   );
 
   const onEdgeContextMenu = useCallback(

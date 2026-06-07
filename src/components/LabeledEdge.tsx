@@ -23,6 +23,59 @@ interface LabeledEdgeData {
    * child left).
    */
   direction?: "right" | "left" | "up" | "down";
+  /**
+   * Graph-mode edge (both endpoints in a flagged connected component — see
+   * `lib/graphMode.ts`). Renders as a perpendicular bezier between the
+   * dynamically chosen shortest handle pair (CanvasBoard writes sourceHandle
+   * / targetHandle on the render-layer edge), skipping the tree-oriented
+   * smoothstep routing entirely.
+   */
+  graph?: boolean;
+}
+
+/** Outward unit normal of a card side, by xyflow handle Position. */
+function positionNormal(pos: Position): [number, number] {
+  switch (pos) {
+    case Position.Top:
+      return [0, -1];
+    case Position.Right:
+      return [1, 0];
+    case Position.Bottom:
+      return [0, 1];
+    case Position.Left:
+      return [-1, 0];
+  }
+}
+
+/**
+ * Obsidian-Canvas-style cubic bezier: both control points extend along the
+ * OUTWARD NORMAL of the handle's card side, by max(60, distance * 0.4) px —
+ * so the line always leaves / enters perpendicular to the card edge with
+ * real tension, instead of sagging toward the midpoint like a low-curvature
+ * default bezier. Returns [path, labelX, labelY] (label at the curve's
+ * t = 0.5 point).
+ */
+function getPerpendicularBezierPath(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  sourcePos: Position,
+  targetPos: Position,
+): [string, number, number] {
+  const dist = Math.hypot(tx - sx, ty - sy);
+  const k = Math.max(60, dist * 0.4);
+  const [snx, sny] = positionNormal(sourcePos);
+  const [tnx, tny] = positionNormal(targetPos);
+  const c1x = sx + snx * k;
+  const c1y = sy + sny * k;
+  const c2x = tx + tnx * k;
+  const c2y = ty + tny * k;
+  const path = `M ${sx},${sy} C ${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}`;
+  // Cubic bezier point at t = 0.5: (P0 + 3·P1 + 3·P2 + P3) / 8.
+  const labelX = (sx + 3 * c1x + 3 * c2x + tx) / 8;
+  const labelY = (sy + 3 * c1y + 3 * c2y + ty) / 8;
+  return [path, labelX, labelY];
 }
 
 /**
@@ -148,6 +201,8 @@ function LabeledEdgeImpl(props: EdgeProps) {
   // Floating-edge: derive endpoints from current node bboxes. Re-renders on
   // drag because useInternalNode subscribes to position changes. Fall back to
   // xyflow's handle-derived props on the first frame when measure isn't ready.
+  const isGraph = Boolean(data.graph);
+
   let sx = props.sourceX;
   let sy = props.sourceY;
   let tx = props.targetX;
@@ -157,7 +212,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let centerX: number | undefined;
   let centerY: number | undefined;
   const dir: EdgeDir = (data.direction as EdgeDir | undefined) ?? "right";
-  if (sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
+  if (!isGraph && sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
     const p = getEdgeParams(sourceNode, targetNode, dir);
     sx = p.sx;
     sy = p.sy;
@@ -169,23 +224,33 @@ function LabeledEdgeImpl(props: EdgeProps) {
     centerY = p.centerY;
   }
 
-  // borderRadius softens the corners; the default 10 looks "cared for" — the
-  // default 5 reads as too sharp on a 1.6px stroke; bigger than ~14 starts
-  // looking bezier-y and loses the circuit-board feel. The value can now be
-  // customized per edge style preset via data.borderRadius.
-  // centerX makes every edge from the same source share its bend column,
-  // which is what produces the visual stem when a parent has many children.
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX: sx,
-    sourceY: sy,
-    targetX: tx,
-    targetY: ty,
-    sourcePosition: sourcePos,
-    targetPosition: targetPos,
-    borderRadius: data.borderRadius ?? 10,
-    centerX,
-    centerY,
-  });
+  // Graph edges: drawn between the handle-derived endpoints (the shortest
+  // 4×4 pair chosen by CanvasBoard's edge assembly — props.sourceX/Y already
+  // reflect the assigned sourceHandle/targetHandle). The perpendicular
+  // bezier won the candidate bake-off (vs straight / rounded-step / soft
+  // bezier) — it leaves the card edge at a right angle with real tension.
+  //
+  // Tree edges keep the smoothstep routing untouched: borderRadius softens
+  // the corners; centerX makes every edge from the same source share its bend
+  // column, which produces the visual stem when a parent has many children.
+  let path: string;
+  let labelX: number;
+  let labelY: number;
+  if (isGraph) {
+    [path, labelX, labelY] = getPerpendicularBezierPath(sx, sy, tx, ty, sourcePos, targetPos);
+  } else {
+    [path, labelX, labelY] = getSmoothStepPath({
+      sourceX: sx,
+      sourceY: sy,
+      targetX: tx,
+      targetY: ty,
+      sourcePosition: sourcePos,
+      targetPosition: targetPos,
+      borderRadius: data.borderRadius ?? 10,
+      centerX,
+      centerY,
+    });
+  }
 
   const externalEditing = Boolean(data.editing);
   const [editing, setEditing] = useState<boolean>(externalEditing);

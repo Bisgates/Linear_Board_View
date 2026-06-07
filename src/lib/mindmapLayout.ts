@@ -647,13 +647,24 @@ function projectLocal(p: number, s: number, f: Frame): { x: number; y: number } 
  *
  * The very first root keeps its current Y; subsequent roots shift downward.
  * X anchors are preserved (each tree fans out from where its root sits).
+ *
+ * `excludeIds` (graph-mode exemption): every node in the set is removed from
+ * the layout input entirely — its tree is neither moved NOR treated as an
+ * obstacle when stacking the remaining roots. Because graph domains are
+ * whole connected components, excluding their members also removes every
+ * edge touching them, so no half-tree is ever laid out.
  */
 export function tidyAllRoots(
   nodes: NodeGeo[],
   edges: EdgeLike[],
   config: TidyConfig = DEFAULT_TIDY_CONFIG,
   directions?: Readonly<Record<string, RootDirection>>,
+  excludeIds?: ReadonlySet<string>,
 ): TidyMove[] {
+  if (excludeIds && excludeIds.size > 0) {
+    nodes = nodes.filter((n) => !excludeIds.has(n.id));
+    edges = edges.filter((e) => !excludeIds.has(e.source) && !excludeIds.has(e.target));
+  }
   const roots = findAllRoots(nodes, edges);
   if (roots.length === 0) return [];
 
