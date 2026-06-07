@@ -11,8 +11,7 @@ export interface MenuItem {
   /** Unique within a single menu render — used as the React key. */
   id: string;
   label: string;
-  /** Optional only for `heading` rows — every actionable row should set it. */
-  onSelect?: () => void;
+  onSelect: () => void;
   tone?: "default" | "danger";
   /** Optional disabled state — row stays visible but unclickable + dimmed. */
   disabled?: boolean;
@@ -23,10 +22,6 @@ export interface MenuItem {
    *  options (e.g. Direction: Right / Left / Up / Down) below the regular
    *  actions, so the menu still reads as a single ordered list. */
   separatorAbove?: boolean;
-  /** Non-interactive group label — rendered as a small dimmed uppercase row
-   *  (no hover, no click, no checkmark slot). Used to caption radio groups
-   *  when a menu carries more than one of them. */
-  heading?: boolean;
 }
 
 interface Props {
@@ -89,22 +84,7 @@ export function BoardContextMenu({ x, y, items, onDismiss }: Props) {
         const danger = item.tone === "danger";
         const baseColor = danger ? "var(--warm-red)" : "var(--ink)";
         const hoverBg = danger ? "rgba(178,58,72,0.08)" : "rgba(26,24,20,0.06)";
-        const row = item.heading ? (
-          <div
-            key={item.id}
-            style={{
-              padding: "5px 12px 2px",
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              color: "var(--muted)",
-              userSelect: "none",
-            }}
-          >
-            {item.label}
-          </div>
-        ) : (
+        const row = (
           <button
             key={item.id}
             disabled={item.disabled}
@@ -113,7 +93,7 @@ export function BoardContextMenu({ x, y, items, onDismiss }: Props) {
               // Run the action first, then dismiss — if the action throws we
               // still want the menu gone so the user isn't stuck with it.
               try {
-                item.onSelect?.();
+                item.onSelect();
               } finally {
                 onDismiss();
               }

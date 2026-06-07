@@ -3,13 +3,11 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   Position,
-  getBezierPath,
   getSmoothStepPath,
   useInternalNode,
   type EdgeProps,
   type InternalNode,
 } from "@xyflow/react";
-import type { GraphEdgeArrow, GraphEdgeStyle } from "../lib/graphMode";
 
 interface LabeledEdgeData {
   label?: string;
@@ -27,26 +25,12 @@ interface LabeledEdgeData {
   direction?: "right" | "left" | "up" | "down";
   /**
    * Graph-mode edge (both endpoints in a flagged connected component — see
-   * `lib/graphMode.ts`). Renders as a gentle bezier between the dynamically
-   * chosen shortest handle pair (CanvasBoard writes sourceHandle /
-   * targetHandle on the render-layer edge), skipping the tree-oriented
+   * `lib/graphMode.ts`). Renders as a perpendicular bezier between the
+   * dynamically chosen shortest handle pair (CanvasBoard writes sourceHandle
+   * / targetHandle on the render-layer edge), skipping the tree-oriented
    * smoothstep routing entirely.
    */
   graph?: boolean;
-  /**
-   * TEMPORARY: which of the 4 candidate graph linetypes to render — driven
-   * by the in-menu "Edge style" switcher (localStorage-backed) so the user
-   * can pick the winner by eye. Tree edges ignore this. Defaults to
-   * "perpendicular".
-   */
-  graphStyle?: GraphEdgeStyle;
-  /**
-   * TEMPORARY: arrow / line treatment dimension of the same switcher. Only
-   * "dots" needs handling here (endpoint circles drawn by this component);
-   * solid/dashed + marker on/off are carried entirely by the edge's
-   * `style.strokeDasharray` / `markerEnd` props set in CanvasBoard.
-   */
-  graphArrow?: GraphEdgeArrow;
 }
 
 /** Outward unit normal of a card side, by xyflow handle Position. */
@@ -242,9 +226,9 @@ function LabeledEdgeImpl(props: EdgeProps) {
 
   // Graph edges: drawn between the handle-derived endpoints (the shortest
   // 4×4 pair chosen by CanvasBoard's edge assembly — props.sourceX/Y already
-  // reflect the assigned sourceHandle/targetHandle). Linetype is the
-  // TEMPORARY 4-way candidate switch (see GraphEdgeStyle); default is the
-  // perpendicular bezier.
+  // reflect the assigned sourceHandle/targetHandle). The perpendicular
+  // bezier won the candidate bake-off (vs straight / rounded-step / soft
+  // bezier) — it leaves the card edge at a right angle with real tension.
   //
   // Tree edges keep the smoothstep routing untouched: borderRadius softens
   // the corners; centerX makes every edge from the same source share its bend
@@ -253,34 +237,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let labelX: number;
   let labelY: number;
   if (isGraph) {
-    const style: GraphEdgeStyle = data.graphStyle ?? "perpendicular";
-    if (style === "straight") {
-      path = `M ${sx},${sy} L ${tx},${ty}`;
-      labelX = (sx + tx) / 2;
-      labelY = (sy + ty) / 2;
-    } else if (style === "smoothstep") {
-      [path, labelX, labelY] = getSmoothStepPath({
-        sourceX: sx,
-        sourceY: sy,
-        targetX: tx,
-        targetY: ty,
-        sourcePosition: sourcePos,
-        targetPosition: targetPos,
-        borderRadius: 16,
-      });
-    } else if (style === "bezier") {
-      [path, labelX, labelY] = getBezierPath({
-        sourceX: sx,
-        sourceY: sy,
-        targetX: tx,
-        targetY: ty,
-        sourcePosition: sourcePos,
-        targetPosition: targetPos,
-        curvature: 0.2,
-      });
-    } else {
-      [path, labelX, labelY] = getPerpendicularBezierPath(sx, sy, tx, ty, sourcePos, targetPos);
-    }
+    [path, labelX, labelY] = getPerpendicularBezierPath(sx, sy, tx, ty, sourcePos, targetPos);
   } else {
     [path, labelX, labelY] = getSmoothStepPath({
       sourceX: sx,
@@ -334,23 +291,9 @@ function LabeledEdgeImpl(props: EdgeProps) {
 
   const hasLabel = editing || (data.label ?? "").length > 0;
 
-  // "Dot endpoints" arrow variant: small filled circles at both ends of the
-  // edge instead of any directional marker — the classic undirected-graph
-  // look. Fill matches the edge stroke (set by CanvasBoard's graph override).
-  const showDots = isGraph && data.graphArrow === "dots";
-  const dotFill =
-    ((props.style as React.CSSProperties | undefined)?.stroke as string | undefined) ??
-    "var(--edge)";
-
   return (
     <>
       <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} />
-      {showDots && (
-        <>
-          <circle cx={sx} cy={sy} r={3.5} fill={dotFill} />
-          <circle cx={tx} cy={ty} r={3.5} fill={dotFill} />
-        </>
-      )}
       {hasLabel && (
         <EdgeLabelRenderer>
           <div
