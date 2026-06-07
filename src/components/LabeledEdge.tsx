@@ -9,6 +9,7 @@ import {
   type EdgeProps,
   type InternalNode,
 } from "@xyflow/react";
+import type { GraphEdgeArrow, GraphEdgeStyle } from "../lib/graphMode";
 
 interface LabeledEdgeData {
   label?: string;
@@ -32,6 +33,65 @@ interface LabeledEdgeData {
    * smoothstep routing entirely.
    */
   graph?: boolean;
+  /**
+   * TEMPORARY: which of the 4 candidate graph linetypes to render — driven
+   * by the in-menu "Edge style" switcher (localStorage-backed) so the user
+   * can pick the winner by eye. Tree edges ignore this. Defaults to
+   * "perpendicular".
+   */
+  graphStyle?: GraphEdgeStyle;
+  /**
+   * TEMPORARY: arrow / line treatment dimension of the same switcher. Only
+   * "dots" needs handling here (endpoint circles drawn by this component);
+   * solid/dashed + marker on/off are carried entirely by the edge's
+   * `style.strokeDasharray` / `markerEnd` props set in CanvasBoard.
+   */
+  graphArrow?: GraphEdgeArrow;
+}
+
+/** Outward unit normal of a card side, by xyflow handle Position. */
+function positionNormal(pos: Position): [number, number] {
+  switch (pos) {
+    case Position.Top:
+      return [0, -1];
+    case Position.Right:
+      return [1, 0];
+    case Position.Bottom:
+      return [0, 1];
+    case Position.Left:
+      return [-1, 0];
+  }
+}
+
+/**
+ * Obsidian-Canvas-style cubic bezier: both control points extend along the
+ * OUTWARD NORMAL of the handle's card side, by max(60, distance * 0.4) px —
+ * so the line always leaves / enters perpendicular to the card edge with
+ * real tension, instead of sagging toward the midpoint like a low-curvature
+ * default bezier. Returns [path, labelX, labelY] (label at the curve's
+ * t = 0.5 point).
+ */
+function getPerpendicularBezierPath(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  sourcePos: Position,
+  targetPos: Position,
+): [string, number, number] {
+  const dist = Math.hypot(tx - sx, ty - sy);
+  const k = Math.max(60, dist * 0.4);
+  const [snx, sny] = positionNormal(sourcePos);
+  const [tnx, tny] = positionNormal(targetPos);
+  const c1x = sx + snx * k;
+  const c1y = sy + sny * k;
+  const c2x = tx + tnx * k;
+  const c2y = ty + tny * k;
+  const path = `M ${sx},${sy} C ${c1x},${c1y} ${c2x},${c2y} ${tx},${ty}`;
+  // Cubic bezier point at t = 0.5: (P0 + 3·P1 + 3·P2 + P3) / 8.
+  const labelX = (sx + 3 * c1x + 3 * c2x + tx) / 8;
+  const labelY = (sy + 3 * c1y + 3 * c2y + ty) / 8;
+  return [path, labelX, labelY];
 }
 
 /**
@@ -180,10 +240,11 @@ function LabeledEdgeImpl(props: EdgeProps) {
     centerY = p.centerY;
   }
 
-  // Graph edges: gentle bezier between the handle-derived endpoints (the
-  // shortest 4×4 pair chosen by CanvasBoard's edge assembly — props.sourceX/Y
-  // already reflect the assigned sourceHandle/targetHandle). Low curvature so
-  // the line reads as a soft arc, clearly distinct from the tree smoothstep.
+  // Graph edges: drawn between the handle-derived endpoints (the shortest
+  // 4×4 pair chosen by CanvasBoard's edge assembly — props.sourceX/Y already
+  // reflect the assigned sourceHandle/targetHandle). Linetype is the
+  // TEMPORARY 4-way candidate switch (see GraphEdgeStyle); default is the
+  // perpendicular bezier.
   //
   // Tree edges keep the smoothstep routing untouched: borderRadius softens
   // the corners; centerX makes every edge from the same source share its bend
@@ -192,15 +253,34 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let labelX: number;
   let labelY: number;
   if (isGraph) {
-    [path, labelX, labelY] = getBezierPath({
-      sourceX: sx,
-      sourceY: sy,
-      targetX: tx,
-      targetY: ty,
-      sourcePosition: sourcePos,
-      targetPosition: targetPos,
-      curvature: 0.2,
-    });
+    const style: GraphEdgeStyle = data.graphStyle ?? "perpendicular";
+    if (style === "straight") {
+      path = `M ${sx},${sy} L ${tx},${ty}`;
+      labelX = (sx + tx) / 2;
+      labelY = (sy + ty) / 2;
+    } else if (style === "smoothstep") {
+      [path, labelX, labelY] = getSmoothStepPath({
+        sourceX: sx,
+        sourceY: sy,
+        targetX: tx,
+        targetY: ty,
+        sourcePosition: sourcePos,
+        targetPosition: targetPos,
+        borderRadius: 16,
+      });
+    } else if (style === "bezier") {
+      [path, labelX, labelY] = getBezierPath({
+        sourceX: sx,
+        sourceY: sy,
+        targetX: tx,
+        targetY: ty,
+        sourcePosition: sourcePos,
+        targetPosition: targetPos,
+        curvature: 0.2,
+      });
+    } else {
+      [path, labelX, labelY] = getPerpendicularBezierPath(sx, sy, tx, ty, sourcePos, targetPos);
+    }
   } else {
     [path, labelX, labelY] = getSmoothStepPath({
       sourceX: sx,
@@ -254,9 +334,23 @@ function LabeledEdgeImpl(props: EdgeProps) {
 
   const hasLabel = editing || (data.label ?? "").length > 0;
 
+  // "Dot endpoints" arrow variant: small filled circles at both ends of the
+  // edge instead of any directional marker — the classic undirected-graph
+  // look. Fill matches the edge stroke (set by CanvasBoard's graph override).
+  const showDots = isGraph && data.graphArrow === "dots";
+  const dotFill =
+    ((props.style as React.CSSProperties | undefined)?.stroke as string | undefined) ??
+    "var(--edge)";
+
   return (
     <>
       <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} />
+      {showDots && (
+        <>
+          <circle cx={sx} cy={sy} r={3.5} fill={dotFill} />
+          <circle cx={tx} cy={ty} r={3.5} fill={dotFill} />
+        </>
+      )}
       {hasLabel && (
         <EdgeLabelRenderer>
           <div

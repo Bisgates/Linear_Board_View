@@ -48,8 +48,21 @@ import {
   type TidyMove,
 } from "../lib/mindmapLayout";
 import {
+  GRAPH_EDGE_ARROWS,
+  GRAPH_EDGE_COLORS,
+  GRAPH_EDGE_STYLES,
   computeGraphNodeIds,
+  graphEdgeColorCss,
+  loadGraphEdgeArrow,
+  loadGraphEdgeColor,
+  loadGraphEdgeStyle,
   pickShortestHandlePair,
+  saveGraphEdgeArrow,
+  saveGraphEdgeColor,
+  saveGraphEdgeStyle,
+  type GraphEdgeArrow,
+  type GraphEdgeColor,
+  type GraphEdgeStyle,
   type HandlePair,
 } from "../lib/graphMode";
 
@@ -807,6 +820,7 @@ function BoardInner({
   const getNodeGeosRef = useRef<(() => NodeGeo[]) | null>(null);
   const applyTidyMovesRef = useRef<((moves: TidyMove[]) => void) | null>(null);
   const reactFlow = useReactFlow();
+
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   useImperativeHandle(
@@ -893,6 +907,33 @@ function BoardInner({
     },
     [setData],
   );
+
+  // TEMPORARY graph-edge appearance switcher, 3 orthogonal dimensions (path
+  // shape / stroke color / arrow-line treatment): React state (so picking an
+  // option re-renders the edges immediately) backed by localStorage (so the
+  // picks survive restarts while the candidates are being compared). The
+  // whole switcher gets deleted once the user settles on a winner combo.
+  const [graphEdgeStyle, setGraphEdgeStyleState] = useState<GraphEdgeStyle>(() =>
+    loadGraphEdgeStyle(),
+  );
+  const setGraphEdgeStyle = useCallback((style: GraphEdgeStyle) => {
+    saveGraphEdgeStyle(style);
+    setGraphEdgeStyleState(style);
+  }, []);
+  const [graphEdgeColor, setGraphEdgeColorState] = useState<GraphEdgeColor>(() =>
+    loadGraphEdgeColor(),
+  );
+  const setGraphEdgeColor = useCallback((color: GraphEdgeColor) => {
+    saveGraphEdgeColor(color);
+    setGraphEdgeColorState(color);
+  }, []);
+  const [graphEdgeArrow, setGraphEdgeArrowState] = useState<GraphEdgeArrow>(() =>
+    loadGraphEdgeArrow(),
+  );
+  const setGraphEdgeArrow = useCallback((arrow: GraphEdgeArrow) => {
+    saveGraphEdgeArrow(arrow);
+    setGraphEdgeArrowState(arrow);
+  }, []);
 
   // Rebuild nodes when data shape changes (counts / contents) or when the
   // halo / edit target moves. `selected` and `autoEdit` are baked in by
@@ -1125,7 +1166,7 @@ function BoardInner({
 
     const out = edges.map((e) => {
       const isGraph = graphNodeIds.has(e.source) && graphNodeIds.has(e.target);
-      let handleOverride: { sourceHandle?: string; targetHandle?: string } = {};
+      let graphOverride: Partial<Edge> = {};
       if (isGraph) {
         const sn = nodeById.get(e.source);
         const tn = nodeById.get(e.target);
@@ -1140,15 +1181,36 @@ function BoardInner({
             GRAPH_HANDLE_HYSTERESIS_PX,
           );
           pairs.set(e.id, pair);
-          handleOverride = { sourceHandle: pair.s, targetHandle: pair.t };
+          graphOverride = { sourceHandle: pair.s, targetHandle: pair.t };
         }
+        // Visual dimensions of the TEMPORARY switcher: stroke color (user
+        // pick), dash (arrow dimension), marker on/off. Slightly thinner
+        // than the 1.6px tree stroke so a mixed canvas separates the two
+        // languages at a glance.
+        const strokeCss = graphEdgeColorCss(graphEdgeColor);
+        graphOverride.style = {
+          stroke: strokeCss,
+          strokeWidth: 1.4,
+          ...(graphEdgeArrow === "dashed-arrow" ? { strokeDasharray: "6 4" } : {}),
+        } as React.CSSProperties;
+        graphOverride.markerEnd =
+          graphEdgeArrow === "arrow" || graphEdgeArrow === "dashed-arrow"
+            ? {
+                type: MarkerType.ArrowClosed,
+                color: strokeCss,
+                width: 16,
+                height: 16,
+              }
+            : undefined;
       }
       return {
         ...e,
-        ...handleOverride,
+        ...graphOverride,
         data: {
           ...(e.data ?? {}),
           graph: isGraph,
+          graphStyle: graphEdgeStyle,
+          graphArrow: graphEdgeArrow,
           onCommit: (label: string) => commitEdgeLabel(e.id, label),
           onEditEnd: edgeEditingFinished,
         } as Record<string, unknown>,
@@ -1160,7 +1222,7 @@ function BoardInner({
       if (!liveGraphEdgeIds.has(id)) pairs.delete(id);
     }
     return out;
-  }, [edges, nodes, graphNodeIds, commitEdgeLabel, edgeEditingFinished]);
+  }, [edges, nodes, graphNodeIds, graphEdgeStyle, graphEdgeColor, graphEdgeArrow, commitEdgeLabel, edgeEditingFinished]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -2948,6 +3010,40 @@ function BoardInner({
           separatorAbove: true,
           onSelect: () => toggleGraphFlag(node.id),
         });
+        // TEMPORARY: graph-edge appearance candidates — three orthogonal
+        // radio groups (path shape / stroke color / arrow-line) under the
+        // Graph toggle, each captioned by a dimmed heading row. Only shown
+        // while the card's domain IS a graph, so the picker sits right where
+        // its effect is visible. Deleted once the user settles on a combo.
+        if (inGraphDomain) {
+          items.push({ id: "graph-style-head", label: "Edge style", heading: true, separatorAbove: true });
+          for (const s of GRAPH_EDGE_STYLES) {
+            items.push({
+              id: `graph-edge-style-${s.id}`,
+              label: s.label,
+              checked: graphEdgeStyle === s.id,
+              onSelect: () => setGraphEdgeStyle(s.id),
+            });
+          }
+          items.push({ id: "graph-color-head", label: "Edge color", heading: true, separatorAbove: true });
+          for (const c of GRAPH_EDGE_COLORS) {
+            items.push({
+              id: `graph-edge-color-${c.id}`,
+              label: c.label,
+              checked: graphEdgeColor === c.id,
+              onSelect: () => setGraphEdgeColor(c.id),
+            });
+          }
+          items.push({ id: "graph-arrow-head", label: "Arrow / line", heading: true, separatorAbove: true });
+          for (const a of GRAPH_EDGE_ARROWS) {
+            items.push({
+              id: `graph-edge-arrow-${a.id}`,
+              label: a.label,
+              checked: graphEdgeArrow === a.id,
+              onSelect: () => setGraphEdgeArrow(a.id),
+            });
+          }
+        }
       } else {
         items.push({
           id: "remove-issue",
@@ -2985,7 +3081,7 @@ function BoardInner({
 
       setMenu({ x, y, items });
     },
-    [localCoords, copyCardId, deleteNote, removeIssueFromBoard, setRootDirection, graphNodeIds, toggleGraphFlag],
+    [localCoords, copyCardId, deleteNote, removeIssueFromBoard, setRootDirection, graphNodeIds, toggleGraphFlag, graphEdgeStyle, setGraphEdgeStyle, graphEdgeColor, setGraphEdgeColor, graphEdgeArrow, setGraphEdgeArrow],
   );
 
   const onEdgeContextMenu = useCallback(
