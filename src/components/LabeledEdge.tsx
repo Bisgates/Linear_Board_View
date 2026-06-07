@@ -3,6 +3,7 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   Position,
+  getBezierPath,
   getSmoothStepPath,
   useInternalNode,
   type EdgeProps,
@@ -23,6 +24,14 @@ interface LabeledEdgeData {
    * child left).
    */
   direction?: "right" | "left" | "up" | "down";
+  /**
+   * Graph-mode edge (both endpoints in a flagged connected component — see
+   * `lib/graphMode.ts`). Renders as a gentle bezier between the dynamically
+   * chosen shortest handle pair (CanvasBoard writes sourceHandle /
+   * targetHandle on the render-layer edge), skipping the tree-oriented
+   * smoothstep routing entirely.
+   */
+  graph?: boolean;
 }
 
 /**
@@ -148,6 +157,8 @@ function LabeledEdgeImpl(props: EdgeProps) {
   // Floating-edge: derive endpoints from current node bboxes. Re-renders on
   // drag because useInternalNode subscribes to position changes. Fall back to
   // xyflow's handle-derived props on the first frame when measure isn't ready.
+  const isGraph = Boolean(data.graph);
+
   let sx = props.sourceX;
   let sy = props.sourceY;
   let tx = props.targetX;
@@ -157,7 +168,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let centerX: number | undefined;
   let centerY: number | undefined;
   const dir: EdgeDir = (data.direction as EdgeDir | undefined) ?? "right";
-  if (sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
+  if (!isGraph && sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
     const p = getEdgeParams(sourceNode, targetNode, dir);
     sx = p.sx;
     sy = p.sy;
@@ -169,23 +180,40 @@ function LabeledEdgeImpl(props: EdgeProps) {
     centerY = p.centerY;
   }
 
-  // borderRadius softens the corners; the default 10 looks "cared for" — the
-  // default 5 reads as too sharp on a 1.6px stroke; bigger than ~14 starts
-  // looking bezier-y and loses the circuit-board feel. The value can now be
-  // customized per edge style preset via data.borderRadius.
-  // centerX makes every edge from the same source share its bend column,
-  // which is what produces the visual stem when a parent has many children.
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX: sx,
-    sourceY: sy,
-    targetX: tx,
-    targetY: ty,
-    sourcePosition: sourcePos,
-    targetPosition: targetPos,
-    borderRadius: data.borderRadius ?? 10,
-    centerX,
-    centerY,
-  });
+  // Graph edges: gentle bezier between the handle-derived endpoints (the
+  // shortest 4×4 pair chosen by CanvasBoard's edge assembly — props.sourceX/Y
+  // already reflect the assigned sourceHandle/targetHandle). Low curvature so
+  // the line reads as a soft arc, clearly distinct from the tree smoothstep.
+  //
+  // Tree edges keep the smoothstep routing untouched: borderRadius softens
+  // the corners; centerX makes every edge from the same source share its bend
+  // column, which produces the visual stem when a parent has many children.
+  let path: string;
+  let labelX: number;
+  let labelY: number;
+  if (isGraph) {
+    [path, labelX, labelY] = getBezierPath({
+      sourceX: sx,
+      sourceY: sy,
+      targetX: tx,
+      targetY: ty,
+      sourcePosition: sourcePos,
+      targetPosition: targetPos,
+      curvature: 0.2,
+    });
+  } else {
+    [path, labelX, labelY] = getSmoothStepPath({
+      sourceX: sx,
+      sourceY: sy,
+      targetX: tx,
+      targetY: ty,
+      sourcePosition: sourcePos,
+      targetPosition: targetPos,
+      borderRadius: data.borderRadius ?? 10,
+      centerX,
+      centerY,
+    });
+  }
 
   const externalEditing = Boolean(data.editing);
   const [editing, setEditing] = useState<boolean>(externalEditing);

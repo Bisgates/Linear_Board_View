@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EMPTY_BOARD, type BoardData } from "./workingOn";
+import { pruneGraphFlags } from "./graphMode";
 import {
   type BoardSource,
   boardSourceKey,
@@ -59,7 +60,10 @@ export function useBoardState(
     setLoaded(false);
     (async () => {
       try {
-        const d = await loadBoardFor(current);
+        // Orphan sweep on load: drop graphFlags entries whose node no longer
+        // exists (same convention as stored positions). No-op (same object)
+        // when nothing is stale.
+        const d = pruneGraphFlags(await loadBoardFor(current));
         if (cancelled) return;
         latestRef.current = d;
         undoStack.current = [];

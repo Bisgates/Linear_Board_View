@@ -92,6 +92,16 @@ export interface BoardData {
    * carry no per-node object on the board.
    */
   rootDirections?: Record<string, RootDirection>;
+  /**
+   * Per-node "this connected component is a graph" marker. Key = node id
+   * (set via the note card's right-click "Graph" toggle). The flag is
+   * per-NODE but its effect is per-DOMAIN: any flagged node turns its whole
+   * connected component (computed over `edges` as an undirected graph) into
+   * graph rendering — shortest-handle-pair bezier edges, exempt from F /
+   * Shift+F tidy. See `lib/graphMode.ts`. Orphan entries (node deleted) are
+   * pruned on board load, same convention as positions.
+   */
+  graphFlags?: Record<string, true>;
 }
 
 export const EMPTY_BOARD: BoardData = {
@@ -100,6 +110,7 @@ export const EMPTY_BOARD: BoardData = {
   edges: [],
   groups: [],
   rootDirections: {},
+  graphFlags: {},
 };
 
 // Tiny random id; not crypto, just unique enough within one user's session.

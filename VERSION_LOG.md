@@ -1,5 +1,7 @@
 # Version Log
 
+- [2026-06-07 13:18] v0.37.0 — 画布新增 Graph 模式：note 卡右键 "Graph" 把整个连通域标成图 —— 域内连线变成四面最近连接点之间的轻微曲线、拖卡时连接点实时跟随切换；F / Shift+F 整理跳过图域（树域照常）；图域内卡片菜单不再显示 Direction 选项；标记随 board 持久化、重启保留、可 undo
+
 - [2026-05-20 16:59] v0.36.1 — 修 updater "上一版本永远显示 v0.26.2" + 更新说明空缺 + UpdaterModal 视觉重做
   - tauri.conf.json + Cargo.toml 的 version 历次没跟 package.json 同步，CFBundleShortVersionString 锁在 0.26.2 误导了 ~10 个版本；release.sh 加 version triplet 一致性 guard，三处不齐直接 die
   - release.sh 读取 VERSION_LOG 条目的 awk regex 没匹配实际格式 `- [time] vX.Y.Z`，notes 一直走 fallback "Release vX.Y.Z" 空话；regex 修对后 in-app updater 弹窗能看到具体改动说明
