@@ -140,6 +140,22 @@ export function writePinnedTabs(order: string[]): Promise<void> {
   return invoke<void>("write_pinned_tabs", { order });
 }
 
+// --- UI preferences (theme, …) — small durable prefs blob in the data dir.
+// Same rationale as pinned tabs: WebKit localStorage is wiped when the .app is
+// replaced by `npm run release`, so prefs that must survive an upgrade live on
+// disk. Shape is a free-form object; today it only carries `{ theme }`. ---
+export interface UiPrefs {
+  theme?: string;
+}
+
+export function readUiPrefs(): Promise<UiPrefs> {
+  return invoke<UiPrefs>("read_ui_prefs");
+}
+
+export function writeUiPrefs(prefs: UiPrefs): Promise<void> {
+  return invoke<void>("write_ui_prefs", { prefs });
+}
+
 // --- Images (markdown-referenced, content-addressed) ---
 // Pasted images live on disk under `<data>/images/<hash>.jpg`; notes embed
 // `![](<hash>.jpg)` in their body, and the WebView reads the bytes back via

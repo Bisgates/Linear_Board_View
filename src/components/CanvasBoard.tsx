@@ -3097,7 +3097,7 @@ function BoardInner({
         {...SHARED_FLOW_PROPS}
         maxZoom={2}
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="rgba(120,116,108,0.38)" />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1.6} color="var(--canvas-dots)" />
         <ViewportPortal>
           {groupFrames.map((f) => (
             <div
@@ -3238,8 +3238,8 @@ function BoardInner({
           position="bottom-left"
           pannable
           zoomable
-          maskColor="rgba(244,236,221,0.65)"
-          nodeColor="rgba(26,24,20,0.35)"
+          maskColor="var(--minimap-mask)"
+          nodeColor="var(--minimap-node)"
           nodeStrokeColor="transparent"
         />
       </ReactFlow>
