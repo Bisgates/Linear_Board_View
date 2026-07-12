@@ -1,6 +1,6 @@
 [package]
 name = "linear-board"
-version = "0.37.0"
+version = "0.38.0"
 description = "Linear Board — spatial UI for Linear issues"
 authors = ["han"]
 edition = "2021"
