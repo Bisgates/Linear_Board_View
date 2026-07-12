@@ -16,6 +16,7 @@
 //       views.json
 //       cv_xxxx.json
 //     pinned_tabs.json                    <- top-bar pinned chip order
+//     ui_prefs.json                       <- UI preferences (theme, …)
 //
 // All read paths return an empty value (rather than 404) when the file is
 // missing — that matches the Vite dev plugin's behaviour and keeps the
@@ -678,6 +679,28 @@ async fn write_pinned_tabs(app: AppHandle, order: Vec<String>) -> AppResult<()> 
     atomic_write_json(&p, &payload).await
 }
 
+// ---------- UI preferences ----------
+//
+// Small durable prefs blob (`ui_prefs.json`). Same rationale as pinned tabs:
+// WebKit's per-bundle localStorage can be wiped when `npm run release` swaps
+// the .app, so prefs that must survive an upgrade live in the data dir. The
+// payload is a free-form JSON object — today it only carries the selected
+// theme (`{ "theme": "figma" }`), but the shape is deliberately generic so
+// future prefs slot in without a new command pair.
+
+#[tauri::command]
+async fn read_ui_prefs(app: AppHandle) -> AppResult<Value> {
+    let p = data_root(&app)?.join("ui_prefs.json");
+    let fallback = serde_json::json!({ "theme": "default" });
+    read_json_or::<Value>(&p, fallback).await
+}
+
+#[tauri::command]
+async fn write_ui_prefs(app: AppHandle, prefs: Value) -> AppResult<()> {
+    let p = data_root(&app)?.join("ui_prefs.json");
+    atomic_write_json(&p, &prefs).await
+}
+
 // Open a local path / URL via macOS `open`. Mirrors the dev-only
 // `POST /api/open` route — Tauri-bundled apps run with the user's privileges,
 // so the surface is intentionally identical: anything the user could double-
@@ -751,6 +774,8 @@ pub fn run() {
             delete_custom_view_board,
             read_pinned_tabs,
             write_pinned_tabs,
+            read_ui_prefs,
+            write_ui_prefs,
             open_path,
             read_linear_api_key,
             backup_now,

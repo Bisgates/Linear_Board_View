@@ -335,7 +335,7 @@ function NoteCardImpl({ data, selected }: Props) {
         borderRadius: 10,
         boxShadow: selected
           ? `0 0 0 3px color-mix(in srgb, ${color} 28%, transparent), 0 4px 14px rgba(0,0,0,0.14)`
-          : "0 1px 0 rgba(0,0,0,0.04)",
+          : "var(--card-shadow)",
         color: "var(--ink)",
         cursor: editing ? "text" : "grab",
         transition: "box-shadow 0.12s",

@@ -66,6 +66,10 @@ interface TopBarProps {
   showCheckUpdate?: boolean;
   checkUpdateBusy?: boolean;
   onCheckUpdate?: () => void;
+  // Theme switcher surfaced inside the hamburger menu. `themeLabel` is the
+  // current theme's display name; `onCycleTheme` advances to the next theme.
+  themeLabel?: string;
+  onCycleTheme?: () => void;
 }
 
 export function TopBar({
@@ -87,6 +91,8 @@ export function TopBar({
   showCheckUpdate,
   checkUpdateBusy,
   onCheckUpdate,
+  themeLabel,
+  onCycleTheme,
 }: TopBarProps) {
   return (
     <header
@@ -167,6 +173,8 @@ export function TopBar({
           showCheckUpdate={showCheckUpdate}
           checkUpdateBusy={checkUpdateBusy}
           onCheckUpdate={onCheckUpdate}
+          themeLabel={themeLabel}
+          onCycleTheme={onCycleTheme}
         />
       </div>
     </header>

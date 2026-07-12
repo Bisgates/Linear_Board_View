@@ -43,6 +43,18 @@
  *     --note-working       "in progress" indicator
  *     --edge               default xyflow edge stroke
  *     --selection-dash     box-select / group-frame dashed outline
+ *
+ *   Structural (theme-overridable — carry a default equal to the historical
+ *   hardcoded look so the default theme stays pixel-identical)
+ *     --card-shadow        resting drop shadow for issue / note cards
+ *     --canvas-dots        xyflow dot-background circle fill
+ *     --minimap-mask       minimap out-of-view mask fill
+ *     --minimap-node       minimap node fill
+ *
+ * Themes: the default (warm-soft) palette lives on bare `:root`. An opt-in
+ * FigJam look lives on `:root[data-theme="figma"]` further down — it overrides
+ * the tokens only, so components never branch on theme. The active theme is
+ * persisted to `<data>/ui_prefs.json` and re-applied on launch.
  */
 
 :root {
@@ -112,6 +124,12 @@
   --edge: #8a8170;
   --selection-dash: #8a9778;
 
+  /* Structural — historical hardcoded values, now themeable */
+  --card-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+  --canvas-dots: rgba(120, 116, 108, 0.38);
+  --minimap-mask: rgba(244, 236, 221, 0.65);
+  --minimap-node: rgba(26, 24, 20, 0.35);
+
   /* Backwards-compat aliases. Older code paths reference --paper / --paper-soft
    * / --warm-red / etc. directly; aliasing keeps those resolving to the new
    * surface tokens without touching every component again. */
@@ -128,6 +146,103 @@
   --sans:
     "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+}
+
+/*
+ * FigJam ("figma") theme — opt-in via `data-theme="figma"` on <html>.
+ * Plain light-gray canvas (no grain, no dots), flat light-blue cards with no
+ * project border, white panels with neutral hairlines, Figma-blue accent,
+ * mid-gray connector edges, and a cleaner saturated status/priority/project
+ * palette. Token overrides only — no component ever branches on theme.
+ */
+:root[data-theme="figma"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --canvas: #f5f5f5;
+  --canvas-grain: transparent;
+  --panel: #ffffff;
+  --panel-soft: #f0f0f0;
+  --card: #bde3ff;
+  --card-soft: #a9d8ff;
+
+  /* Raised-surface family (panels / menus / dialogs / detail / note body).
+   * Redefined directly — the default theme aliases --paper to --canvas, but
+   * FigJam needs white raised surfaces sitting over a gray board, so the two
+   * must diverge. */
+  --paper: #ffffff;
+  --paper-soft: #f5f5f7;
+  --paper-deep: #ebebed;
+
+  /* Text — neutral, near-black primary */
+  --ink: #1e1e1e;
+  --ink-soft: #5c5c5c;
+  --muted: #8c8c8c;
+
+  /* Lines & focus — Figma blue accent + selection */
+  --hairline: rgba(0, 0, 0, 0.10);
+  --hairline-strong: rgba(0, 0, 0, 0.18);
+  --selection-ring: rgba(13, 153, 255, 0.55);
+  --accent: #0d99ff;
+  --accent-soft: rgba(13, 153, 255, 0.10);
+
+  /* Workflow state colours — flat, saturated */
+  --status-backlog: #8c8c8c;
+  --status-unstarted: #5c5c5c;
+  --status-started: #ffa629;
+  --status-completed: #14ae5c;
+  --status-canceled: #b3b3b3;
+  --status-triage: #9747ff;
+
+  /* Priority colours (urgent → low) */
+  --prio-none: #b3b3b3;
+  --prio-urgent: #f24822;
+  --prio-high: #ffa629;
+  --prio-med: #0d99ff;
+  --prio-low: #14ae5c;
+
+  /* Toast */
+  --toast-success-bg: rgba(20, 174, 92, 0.12);
+  --toast-success-bd: rgba(20, 174, 92, 0.40);
+  --toast-success-fg: #0f9d55;
+  --toast-error-bg: rgba(242, 72, 34, 0.10);
+  --toast-error-bd: rgba(242, 72, 34, 0.45);
+  --toast-error-fg: #f24822;
+
+  /* Project palette — 12 flat swatches, dark-enough to read on both white
+   * panels and the light-blue card fill. */
+  --proj-1:  #0d6efd;
+  --proj-2:  #14ae5c;
+  --proj-3:  #e8830c;
+  --proj-4:  #f24822;
+  --proj-5:  #9747ff;
+  --proj-6:  #d6336c;
+  --proj-7:  #0b7285;
+  --proj-8:  #7048e8;
+  --proj-9:  #c2255c;
+  --proj-10: #b8860b;
+  --proj-11: #2b8a3e;
+  --proj-12: #5c7cfa;
+  --proj-none: #b3b3b3;
+
+  /* Notes / edges */
+  --note-done: #b3b3b3;
+  --note-working: #0d99ff;
+  --edge: #7d7d7d;
+  --selection-dash: #0d99ff;
+  --forest: #14ae5c;
+
+  /* Structural overrides */
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --canvas-dots: transparent;
+  --minimap-mask: rgba(0, 0, 0, 0.06);
+  --minimap-node: rgba(0, 0, 0, 0.28);
+  /* Issue-card border removed; selection becomes a crisp Figma-blue ring.
+   * Consumed via `var(--issue-border, …)` / `var(--issue-selected-shadow, …)`
+   * fallbacks in IssueCard so the default theme keeps its project-colour
+   * border + tinted glow without declaring these on bare :root. */
+  --issue-border: none;
+  --issue-selected-shadow: 0 0 0 2px #0d99ff, 0 6px 16px rgba(0, 0, 0, 0.14);
 }
 
 * {

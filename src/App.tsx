@@ -13,9 +13,12 @@ import {
   cleanupOrphanImages,
   createIssueComment,
   isTauri,
+  readUiPrefs,
   refetchAndPersist,
   updateIssue,
+  writeUiPrefs,
 } from "./lib/tauriInvoke";
+import { applyTheme, nextTheme, normalizeTheme, THEME_LABEL, type ThemeName } from "./lib/theme";
 import { migrateImageNotes, noteNeedsImageMigration } from "./lib/migrateImages";
 import { checkForUpdate, runInstall, type UpdateInfo, type DownloadProgress } from "./lib/updater";
 import { maybeSynthesize } from "./lib/synthetic";
@@ -93,6 +96,29 @@ export default function App() {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  // UI theme. Default (warm-soft) uses no `data-theme` attribute; "figma"
+  // applies the FigJam token overrides. Persisted to `<data>/ui_prefs.json`.
+  // Hydration is async (brief default-theme flash on launch is acceptable).
+  const [theme, setTheme] = useState<ThemeName>("default");
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    readUiPrefs()
+      .then((prefs) => setTheme(normalizeTheme(prefs.theme)))
+      .catch((e) => console.error("[ui-prefs] load failed", e));
+  }, []);
+  const cycleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = nextTheme(prev);
+      writeUiPrefs({ theme: next }).catch((e) =>
+        pushToast("error", `Theme save failed: ${String(e)}`),
+      );
+      return next;
+    });
+  }, [pushToast]);
 
   // Updater state machine (Tauri runtime only). One of:
   //   idle      — menu item enabled, no overlay
@@ -748,6 +774,8 @@ export default function App() {
         showCheckUpdate={showCheckUpdate}
         checkUpdateBusy={checkUpdateBusy}
         onCheckUpdate={handleCheckUpdate}
+        themeLabel={THEME_LABEL[theme]}
+        onCycleTheme={cycleTheme}
         addIssueSlot={
           <IssuePickerPopover
             issues={allIssues}

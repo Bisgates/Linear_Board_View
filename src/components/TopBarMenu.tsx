@@ -14,6 +14,11 @@ interface Props {
   showCheckUpdate?: boolean;
   checkUpdateBusy?: boolean;
   onCheckUpdate?: () => void;
+  // Theme switcher. `themeLabel` is the current theme's display name shown as
+  // the item hint; clicking cycles to the next theme (menu stays open so the
+  // hint updates live).
+  themeLabel?: string;
+  onCycleTheme?: () => void;
 }
 
 function formatRelative(isoOrNull: string | null, nowMs: number): string {
@@ -37,6 +42,8 @@ export function TopBarMenu({
   showCheckUpdate,
   checkUpdateBusy,
   onCheckUpdate,
+  themeLabel,
+  onCycleTheme,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -130,6 +137,16 @@ export function TopBarMenu({
                   setOpen(false);
                   onCheckUpdate();
                 }}
+              />
+            </>
+          )}
+          {onCycleTheme && (
+            <>
+              <Separator />
+              <MenuItem
+                label="Theme"
+                hint={themeLabel}
+                onClick={onCycleTheme}
               />
             </>
           )}
