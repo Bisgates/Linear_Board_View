@@ -97,10 +97,11 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // UI theme. Default (warm-soft) uses no `data-theme` attribute; "figma"
-  // applies the FigJam token overrides. Persisted to `<data>/ui_prefs.json`.
-  // Hydration is async (brief default-theme flash on launch is acceptable).
-  const [theme, setTheme] = useState<ThemeName>("default");
+  // UI theme. "default" (warm-soft) uses no `data-theme` attribute; "figma"
+  // applies the FigJam token overrides and is now the boot default for fresh
+  // installs. Persisted to `<data>/ui_prefs.json`.
+  // Hydration is async (brief figma-theme flash on launch is acceptable).
+  const [theme, setTheme] = useState<ThemeName>("figma");
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);

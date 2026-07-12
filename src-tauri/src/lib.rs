@@ -691,7 +691,7 @@ async fn write_pinned_tabs(app: AppHandle, order: Vec<String>) -> AppResult<()> 
 #[tauri::command]
 async fn read_ui_prefs(app: AppHandle) -> AppResult<Value> {
     let p = data_root(&app)?.join("ui_prefs.json");
-    let fallback = serde_json::json!({ "theme": "default" });
+    let fallback = serde_json::json!({ "theme": "figma" });
     read_json_or::<Value>(&p, fallback).await
 }
 
