@@ -1,6 +1,6 @@
 [package]
 name = "linear-board"
-version = "0.38.1"
+version = "0.39.0"
 description = "Linear Board — spatial UI for Linear issues"
 authors = ["han"]
 edition = "2021"
@@ -39,6 +39,16 @@ libc = "0.2"
 # Content-addressed image filenames: sha256(bytes) → first 16 hex chars.
 # Stable hash means identical pastes dedupe to one on-disk file.
 sha2 = "0.10"
+
+# macOS native window chrome (Tahoe titlebar): drive NSWindow directly to get
+# the calendar-app / Vantage look — transparent full-height titlebar, hidden
+# title, no separator hairline, and an empty Unified NSToolbar that lifts the
+# traffic lights to the large inset. Both crates are already in the graph
+# transitively via wry/objc2; re-declared here (macOS-only) so lib.rs can call
+# them. Feature union with wry keeps the resolved versions unchanged.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString"] }
 
 [dev-dependencies]
 # `examples/updater_smoke.rs` validates the signing chain (private key in

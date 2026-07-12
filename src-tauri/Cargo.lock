@@ -1853,12 +1853,14 @@ dependencies = [
 
 [[package]]
 name = "linear-board"
-version = "0.38.1"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "libc",
  "minisign-verify",
+ "objc2",
+ "objc2-foundation",
  "reqwest",
  "serde",
  "serde_json",

@@ -750,6 +750,59 @@ async fn backup_now(app: AppHandle) -> Result<bool, String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// macOS-only native window chrome: the calendar-app / Vantage titlebar look.
+///
+/// AppKit picks the *window generation* (Tahoe 26px corners + new traffic
+/// lights) from the main executable's `LC_BUILD_VERSION` sdk field — the Rust
+/// binary already links against the current Xcode CLT SDK (≥26), so no vtool
+/// re-stamp is needed. This module only shapes the *titlebar form* to match
+/// `vantage/desktop.py::_native_chrome`: transparent full-height titlebar,
+/// hidden title, no separator hairline, and an empty Unified `NSToolbar` whose
+/// only job is to raise the traffic lights to the large inset (three 14×14 at
+/// x≈19, vertical center ≈26px). An empty toolbar draws nothing; it just
+/// changes the titlebar metrics.
+#[cfg(target_os = "macos")]
+mod macos_chrome {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+
+    const FULL_SIZE_CONTENT_VIEW: usize = 1 << 15; // NSWindowStyleMaskFullSizeContentView
+    const TITLE_HIDDEN: isize = 1; // NSWindowTitleVisibilityHidden
+    const SEPARATOR_NONE: isize = 1; // NSTitlebarSeparatorStyleNone
+    const TOOLBAR_UNIFIED: isize = 3; // NSWindowToolbarStyleUnified
+
+    /// Shape the titlebar and return the (+1-retained) empty toolbar pointer so
+    /// the fullscreen juggler can detach/re-attach it. Never released — one
+    /// toolbar lives for the app's lifetime. Must run on the main thread.
+    pub unsafe fn apply(ns_window: *mut AnyObject) -> *mut AnyObject {
+        if ns_window.is_null() {
+            return std::ptr::null_mut();
+        }
+        let _: () = msg_send![ns_window, setTitlebarAppearsTransparent: true];
+        let mask: usize = msg_send![ns_window, styleMask];
+        let _: () = msg_send![ns_window, setStyleMask: mask | FULL_SIZE_CONTENT_VIEW];
+        let _: () = msg_send![ns_window, setTitleVisibility: TITLE_HIDDEN];
+        let _: () = msg_send![ns_window, setTitlebarSeparatorStyle: SEPARATOR_NONE];
+
+        let ident = NSString::from_str("linear-board-chrome");
+        let toolbar: *mut AnyObject = msg_send![class!(NSToolbar), alloc];
+        let toolbar: *mut AnyObject = msg_send![toolbar, initWithIdentifier: &*ident];
+        set_toolbar(ns_window, toolbar);
+        toolbar
+    }
+
+    /// Attach the empty Unified toolbar (windowed) or detach it (`nil` in
+    /// fullscreen, where a pinned empty bar would otherwise cover content at the
+    /// top of the screen). Must run on the main thread.
+    pub unsafe fn set_toolbar(ns_window: *mut AnyObject, toolbar: *mut AnyObject) {
+        let _: () = msg_send![ns_window, setToolbar: toolbar];
+        if !toolbar.is_null() {
+            let _: () = msg_send![ns_window, setToolbarStyle: TOOLBAR_UNIFIED];
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         // In-app updater (manual trigger from DetailPanel). Plugin is registered
@@ -831,6 +884,49 @@ pub fn run() {
             // iCloud Drive is disabled; harmless if backup target permission
             // is denied (errors are logged + swallowed).
             backup::spawn_scheduler(app.handle().clone());
+
+            // macOS Tahoe titlebar chrome (see `macos_chrome`). `setup` runs on
+            // the main thread, so the NSWindow calls are safe here.
+            #[cfg(target_os = "macos")]
+            {
+                use std::sync::atomic::{AtomicBool, Ordering};
+                use std::sync::Arc;
+                if let Some(window) = app
+                    .get_webview_window("main")
+                    .or_else(|| app.webview_windows().into_values().next())
+                {
+                    if let Ok(ns) = window.ns_window() {
+                        let ns_ptr = ns as *mut objc2::runtime::AnyObject;
+                        let toolbar_ptr = unsafe { macos_chrome::apply(ns_ptr) };
+                        // Raw pointers aren't `Send`; smuggle them through the
+                        // `Send` window-event closure as `usize` addresses. The
+                        // closure runs on the main thread, so re-casting and
+                        // touching AppKit inside is safe.
+                        let ns_addr = ns_ptr as usize;
+                        let tb_addr = toolbar_ptr as usize;
+                        let was_fs =
+                            Arc::new(AtomicBool::new(window.is_fullscreen().unwrap_or(false)));
+                        let win = window.clone();
+                        window.on_window_event(move |event| {
+                            // Fullscreen transitions surface as a resize; only
+                            // act on an actual state flip so normal drags don't
+                            // thrash the toolbar.
+                            if let tauri::WindowEvent::Resized(_) = event {
+                                let now = win.is_fullscreen().unwrap_or(false);
+                                if now != was_fs.swap(now, Ordering::SeqCst) {
+                                    let ns = ns_addr as *mut objc2::runtime::AnyObject;
+                                    let tb = if now {
+                                        std::ptr::null_mut()
+                                    } else {
+                                        tb_addr as *mut objc2::runtime::AnyObject
+                                    };
+                                    unsafe { macos_chrome::set_toolbar(ns, tb) };
+                                }
+                            }
+                        });
+                    }
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

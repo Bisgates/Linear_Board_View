@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Linear Board",
-  "version": "0.38.1",
+  "version": "0.39.0",
   "identifier": "com.han.linearboard",
   "build": {
     "beforeDevCommand": "vite",
@@ -17,7 +17,10 @@
         "height": 900,
         "minWidth": 900,
         "minHeight": 600,
-        "resizable": true
+        "resizable": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "theme": "Light"
       }
     ],
     "security": {

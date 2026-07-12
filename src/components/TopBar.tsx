@@ -96,19 +96,30 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <header
+      // Native Tahoe titlebar: content extends under the window top, so the
+      // whole bar doubles as the drag region. Interactive children (buttons,
+      // chips) are the mousedown target and keep working — Tauri only starts a
+      // window drag when the target element itself carries this attribute.
+      data-tauri-drag-region
       style={{
         height: 52,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 20px",
+        // Left inset (88px) clears the traffic lights that now float over the
+        // content's top-left; right stays at 20px.
+        padding: "0 20px 0 88px",
         background: "var(--paper)",
         borderBottom: "1px solid var(--hairline)",
         flexShrink: 0,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div
+        data-tauri-drag-region
+        style={{ display: "flex", alignItems: "center", gap: 16 }}
+      >
         <span
+          data-tauri-drag-region
           style={{
             fontFamily: "'Playfair Display', Georgia, serif",
             fontStyle: "italic",
@@ -116,6 +127,8 @@ export function TopBar({
             fontSize: 20,
             color: "var(--ink)",
             letterSpacing: "0.02em",
+            userSelect: "none",
+            WebkitUserSelect: "none",
           }}
         >
           Linear Board
@@ -123,6 +136,7 @@ export function TopBar({
         {/* Fixed width so the count's digit/plural changes don't shift the
             centerSlot (pinned chip strip) left edge as issues update. */}
         <span
+          data-tauri-drag-region
           style={{
             fontSize: 11,
             color: "var(--muted)",
@@ -133,6 +147,8 @@ export function TopBar({
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            userSelect: "none",
+            WebkitUserSelect: "none",
           }}
         >
           {totalCount !== undefined && totalCount !== issueCount
@@ -141,6 +157,7 @@ export function TopBar({
         </span>
       </div>
       <div
+        data-tauri-drag-region
         style={{
           flex: 1,
           display: "flex",
@@ -154,7 +171,10 @@ export function TopBar({
       >
         {centerSlot}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div
+        data-tauri-drag-region
+        style={{ display: "flex", alignItems: "center", gap: 12 }}
+      >
         {addIssueSlot}
         <ViewSwitcher
           value={activeView}

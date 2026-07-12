@@ -5,7 +5,14 @@
     "windows": [
       {
         "title": "Linear Board (dev)",
-        "focus": false
+        "focus": false,
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "theme": "Light"
       }
     ]
   },
