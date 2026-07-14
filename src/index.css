@@ -1,10 +1,6 @@
 /*
- * Single-theme tokens — the warm-soft palette with its background layers
- * desaturated by ~35% and lifted ~1.5pp ("warm-softer-1" from the theme
- * exploration round). Foreground / accent / status / project / note / edge
- * tokens are inherited verbatim from the warm-soft base so the family
- * identity is preserved and only the canvas/panel/card surfaces step down
- * in yellow.
+ * Figma-based default tokens. FigJam inherits this palette and overrides only
+ * semantic note-card presentation further down.
  *
  * Token contract:
  *
@@ -39,123 +35,20 @@
  *     --proj-1 .. --proj-12, --proj-none
  *
  *   Notes / edges
- *     --note-done          frame colour for done notes (recedes)
- *     --note-working       "in progress" indicator
  *     --edge               default xyflow edge stroke
  *     --selection-dash     box-select / group-frame dashed outline
  *
- *   Structural (theme-overridable — carry a default equal to the historical
- *   hardcoded look so the default theme stays pixel-identical)
+ *   Structural
  *     --card-shadow        resting drop shadow for issue / note cards
  *     --canvas-dots        xyflow dot-background circle fill
  *     --minimap-mask       minimap out-of-view mask fill
  *     --minimap-node       minimap node fill
  *
- * Themes: the default (warm-soft) palette lives on bare `:root`. An opt-in
- * FigJam look lives on `:root[data-theme="figma"]` further down — it overrides
- * the tokens only, so components never branch on theme. The active theme is
- * persisted to `<data>/ui_prefs.json` and re-applied on launch.
+ * The active theme is persisted to `<data>/ui_prefs.json` and re-applied on
+ * launch. Historical `default` and `figma` values both migrate to this palette.
  */
 
 :root {
-  color-scheme: light;
-
-  /* Surfaces — warm-softer-1 (S×0.65, L+1.5pp vs warm-soft) */
-  --canvas: #f7f6f1;
-  --canvas-grain: rgba(0, 0, 0, 0.012);
-  --panel: #f1eee8;
-  --panel-soft: #eae7de;
-  --card: #fcfbf8;
-  --card-soft: #f3f0ea;
-
-  /* Text */
-  --ink: #2a2620;
-  --ink-soft: #58524a;
-  --muted: #968d7d;
-
-  /* Lines & focus */
-  --hairline: rgba(40, 36, 30, 0.14);
-  --hairline-strong: rgba(40, 36, 30, 0.26);
-  --selection-ring: rgba(40, 36, 30, 0.28);
-  --accent: #a85562;
-  --accent-soft: rgba(168, 85, 98, 0.10);
-
-  /* Workflow state colours */
-  --status-backlog: #968d7d;
-  --status-unstarted: #58524a;
-  --status-started: #b07a3e;
-  --status-completed: #4f7a5d;
-  --status-canceled: #b9b1a3;
-  --status-triage: #7a5290;
-
-  /* Priority colours (urgent → low) */
-  --prio-none: #968d7d;
-  --prio-urgent: #a85562;
-  --prio-high: #b07a3e;
-  --prio-med: #4671a0;
-  --prio-low: #4f7a5d;
-
-  /* Toast */
-  --toast-success-bg: rgba(79, 122, 93, 0.12);
-  --toast-success-bd: rgba(79, 122, 93, 0.40);
-  --toast-success-fg: #4f7a5d;
-  --toast-error-bg: rgba(168, 85, 98, 0.10);
-  --toast-error-bd: rgba(168, 85, 98, 0.45);
-  --toast-error-fg: #a85562;
-
-  /* Project palette — hand-curated 12 swatches; hash project name to slot */
-  --proj-1:  #9a5560;
-  --proj-2:  #b07a4f;
-  --proj-3:  #a08745;
-  --proj-4:  #76874a;
-  --proj-5:  #4f8060;
-  --proj-6:  #4e7878;
-  --proj-7:  #527088;
-  --proj-8:  #5d5f88;
-  --proj-9:  #7c5380;
-  --proj-10: #93516e;
-  --proj-11: #76604c;
-  --proj-12: #535e6e;
-  --proj-none: #968d7d;
-
-  /* Notes / edges */
-  --note-done: #b9b1a3;
-  --note-working: #4671a0;
-  --edge: #8a8170;
-  --selection-dash: #8a9778;
-
-  /* Structural — historical hardcoded values, now themeable */
-  --card-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
-  --canvas-dots: rgba(120, 116, 108, 0.38);
-  --minimap-mask: rgba(244, 236, 221, 0.65);
-  --minimap-node: rgba(26, 24, 20, 0.35);
-
-  /* Backwards-compat aliases. Older code paths reference --paper / --paper-soft
-   * / --warm-red / etc. directly; aliasing keeps those resolving to the new
-   * surface tokens without touching every component again. */
-  --paper: var(--canvas);
-  --paper-soft: var(--panel);
-  --paper-deep: var(--panel-soft);
-  --warm-red: var(--accent);
-  --indigo: #3b3a8a;
-  --forest: #2f5c3f;
-  --amber: #a86810;
-  --plum: #6c3483;
-  --slate: #1e5a8a;
-
-  --sans:
-    "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --mono: "JetBrains Mono", "Fira Code", "Courier New", monospace;
-}
-
-/*
- * FigJam ("figma") theme — opt-in via `data-theme="figma"` on <html>.
- * Plain light-gray canvas (no grain, no dots), flat light-blue cards with no
- * project border, white panels with neutral hairlines, Figma-blue accent,
- * mid-gray connector edges, and a cleaner saturated status/priority/project
- * palette. Token overrides only — no component ever branches on theme.
- */
-:root[data-theme="figma"] {
   color-scheme: light;
 
   /* Surfaces */
@@ -166,27 +59,19 @@
   --card: #bde3ff;
   --card-soft: #a9d8ff;
 
-  /* Raised-surface family (panels / menus / dialogs / detail / note body).
-   * Redefined directly — the default theme aliases --paper to --canvas, but
-   * FigJam needs white raised surfaces sitting over a gray board, so the two
-   * must diverge. */
-  --paper: #ffffff;
-  --paper-soft: #f5f5f7;
-  --paper-deep: #ebebed;
-
-  /* Text — neutral, near-black primary */
+  /* Text */
   --ink: #1e1e1e;
   --ink-soft: #5c5c5c;
   --muted: #8c8c8c;
 
-  /* Lines & focus — Figma blue accent + selection */
+  /* Lines & focus */
   --hairline: rgba(0, 0, 0, 0.10);
   --hairline-strong: rgba(0, 0, 0, 0.18);
   --selection-ring: rgba(13, 153, 255, 0.55);
   --accent: #0d99ff;
   --accent-soft: rgba(13, 153, 255, 0.10);
 
-  /* Workflow state colours — flat, saturated */
+  /* Workflow state colours */
   --status-backlog: #8c8c8c;
   --status-unstarted: #5c5c5c;
   --status-started: #ffa629;
@@ -209,8 +94,7 @@
   --toast-error-bd: rgba(242, 72, 34, 0.45);
   --toast-error-fg: #f24822;
 
-  /* Project palette — 12 flat swatches, dark-enough to read on both white
-   * panels and the light-blue card fill. */
+  /* Project palette — flat swatches, dark enough on white and blue surfaces */
   --proj-1:  #0d6efd;
   --proj-2:  #14ae5c;
   --proj-3:  #e8830c;
@@ -226,23 +110,304 @@
   --proj-none: #b3b3b3;
 
   /* Notes / edges */
-  --note-done: #b3b3b3;
-  --note-working: #0d99ff;
   --edge: #7d7d7d;
   --selection-dash: #0d99ff;
-  --forest: #14ae5c;
 
-  /* Structural overrides */
+  /* Structural */
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   --canvas-dots: transparent;
   --minimap-mask: rgba(0, 0, 0, 0.06);
   --minimap-node: rgba(0, 0, 0, 0.28);
-  /* Issue-card border removed; selection becomes a crisp Figma-blue ring.
-   * Consumed via `var(--issue-border, …)` / `var(--issue-selected-shadow, …)`
-   * fallbacks in IssueCard so the default theme keeps its project-colour
-   * border + tinted glow without declaring these on bare :root. */
   --issue-border: none;
   --issue-selected-shadow: 0 0 0 2px #0d99ff, 0 6px 16px rgba(0, 0, 0, 0.14);
+
+  /* Raised surfaces and backwards-compat aliases used by existing components. */
+  --paper: #ffffff;
+  --paper-soft: #f5f5f7;
+  --paper-deep: #ebebed;
+  --warm-red: var(--accent);
+  --indigo: #3b3a8a;
+  --forest: #14ae5c;
+  --amber: #a86810;
+  --plum: #6c3483;
+  --slate: #1e5a8a;
+
+  --sans:
+    "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+}
+
+/* Note-card structure stays shared across themes so editing, links, images,
+ * resizing, and xyflow handles keep one behavior path. The default rules
+ * preserve the framed-paper card; FigJam only overrides presentation. */
+.note-card {
+  position: relative;
+  width: 280px;
+  background: var(--note-color);
+  padding: 2px 2px 2px 6px;
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  color: var(--ink);
+  cursor: grab;
+  transition: box-shadow 0.12s;
+}
+
+.note-card.is-editing {
+  cursor: text;
+}
+
+.note-card.is-sized {
+  width: 100%;
+  height: 100%;
+}
+
+.note-card.is-selected {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--note-color) 28%, transparent),
+    0 4px 14px rgba(0, 0, 0, 0.14);
+}
+
+.note-card__surface {
+  position: relative;
+  background: var(--paper-soft);
+  border-radius: 4px 8px 8px 4px;
+  padding: 10px 12px;
+}
+
+.note-card.is-sized .note-card__surface {
+  height: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.note-card__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 8px;
+  color: var(--note-color);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.note-card__textarea {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.note-card__placeholder {
+  color: var(--muted);
+  font-size: 14px;
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.note-card__line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-card__line--title {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.note-card__line--body {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.note-card__overflow-indicator {
+  position: absolute;
+  right: 16px;
+  bottom: 7px;
+  z-index: 3;
+  color: rgba(26, 24, 20, 0.72);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  pointer-events: none;
+  text-shadow: 0 0 3px rgba(255, 255, 255, 0.72);
+  user-select: none;
+}
+
+.note-card__handle {
+  z-index: 6;
+  width: var(--note-handle-size, 10px);
+  height: var(--note-handle-size, 10px);
+  border: var(--note-handle-border, 1.5px) solid var(--note-color);
+  background: var(--paper);
+}
+
+.note-resizer__line {
+  z-index: 4;
+}
+
+.note-resizer__line.left {
+  border-left-width: 2px !important;
+}
+
+.note-resizer__line.right {
+  border-right-width: 2px !important;
+}
+
+.note-resizer__line.top {
+  border-top-width: 2px !important;
+}
+
+.note-resizer__line.bottom {
+  border-bottom-width: 2px !important;
+}
+
+.note-resizer__handle {
+  z-index: 5;
+  width: 10px !important;
+  height: 10px !important;
+  border: 2px solid var(--accent) !important;
+  border-radius: 2px !important;
+  background: #ffffff !important;
+}
+
+.note-selection-palette {
+  display: flex;
+  gap: 4px;
+  padding: 5px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--paper);
+  box-shadow: 0 2px 8px rgba(26, 24, 20, 0.12);
+}
+
+.note-selection-palette__swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid rgba(26, 24, 20, 0.15);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.note-selection-palette__swatch.is-active {
+  border: 1.5px solid var(--ink);
+}
+
+/* FigJam notes are a single solid pastel surface. NodeResizer owns the selected
+ * boundary, so the card adds no competing glow or shadow. */
+:root[data-theme="figjam"] .note-card {
+  background: var(--note-color);
+  padding: 0;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+:root[data-theme="figjam"] .note-card.is-selected {
+  box-shadow: none;
+}
+
+:root[data-theme="figjam"] .note-card__surface {
+  display: grid;
+  align-items: center;
+  min-height: 100px;
+  padding: 20px;
+  border-radius: inherit;
+  background: transparent;
+}
+
+:root[data-theme="figjam"] .note-card__meta {
+  display: none;
+}
+
+:root[data-theme="figjam"] .note-card.is-sized .note-card__surface {
+  min-height: 0;
+}
+
+:root[data-theme="figjam"] .note-card__label {
+  display: none;
+}
+
+:root[data-theme="figjam"] .note-card__content {
+  min-width: 0;
+  max-width: 100%;
+  align-self: safe center;
+  justify-self: stretch;
+  text-align: center;
+}
+
+:root[data-theme="figjam"] .note-card__body--image-only,
+:root[data-theme="figjam"] .note-card__image-line {
+  text-align: left;
+}
+
+:root[data-theme="figjam"] .note-card__line--outer-empty {
+  display: none;
+}
+
+:root[data-theme="figjam"] .note-card__textarea,
+:root[data-theme="figjam"] .note-card__placeholder,
+:root[data-theme="figjam"] .note-card__line--title,
+:root[data-theme="figjam"] .note-card__line--body {
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+:root[data-theme="figjam"] .note-card__textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+:root[data-theme="figjam"] .note-card__handle {
+  border-color: #ffffff;
+  background: #75c8ff;
+}
+
+:root[data-theme="figjam"] .note-selection-palette {
+  gap: 8px;
+  padding: 9px 11px;
+  border-color: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: #1e1e1e;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="figjam"] .note-selection-palette__swatch {
+  width: 22px;
+  height: 22px;
+  border-color: rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+}
+
+:root[data-theme="figjam"] .note-selection-palette__swatch.is-active {
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 2px #1e1e1e, 0 0 0 4px #9747ff;
+}
+
+:root[data-theme="figjam"] {
+  --xy-selection-background-color: rgba(13, 153, 255, 0.08);
+  --xy-selection-border: 2px solid #0d99ff;
+  --xy-edge-stroke-selected: #0d99ff;
 }
 
 * {
@@ -311,6 +476,19 @@ body {
   border-radius: 6px;
 }
 
+.board-group-frame {
+  border: 1.5px dashed var(--selection-dash);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--selection-dash) 5%, transparent);
+}
+
+:root[data-theme="figjam"] .board-group-frame {
+  border-style: solid;
+  border-color: var(--accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
 /* Connect handles: hide by default, reveal when hovering the node or while
  * a connection drag is in flight. Pointer events stay enabled so an invisible
  * handle still acts as a drop target. */
@@ -318,7 +496,7 @@ body {
   opacity: 0;
   transition:
     opacity 0.12s ease,
-    transform 0.12s ease;
+    scale 0.12s ease;
 }
 .react-flow__node:hover .react-flow__handle,
 .react-flow__node.selected .react-flow__handle {
@@ -326,13 +504,17 @@ body {
 }
 .react-flow__handle:hover {
   opacity: 1 !important;
-  transform: scale(1.4);
+  scale: 1.4;
 }
 /* While the user is dragging a connection line, reveal every target so drop
  * sites are findable. xyflow toggles this class on the wrapper during connect. */
 .react-flow.connecting .react-flow__handle,
 .react-flow.react-flow__container:has(.react-flow__connectionline) .react-flow__handle {
   opacity: 0.85;
+}
+
+:root[data-theme="figjam"] .react-flow__node.selected .note-card__handle {
+  opacity: 1;
 }
 
 /* Edge hover / selected affordance — thicken stroke + faint glow so the user
@@ -351,6 +533,17 @@ body {
 .react-flow__edge.selected .react-flow__edge-path {
   stroke-width: 3 !important;
   filter: drop-shadow(0 0 3px var(--selection-ring));
+}
+
+:root[data-theme="figjam"] .react-flow__edge:hover .react-flow__edge-path,
+:root[data-theme="figjam"] .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--accent) !important;
+  stroke-width: 3.5px !important;
+  filter: none;
+}
+
+:root[data-theme="figjam"] .react-flow__edge-path {
+  transition: stroke 0.12s ease;
 }
 
 /* Mindmap tidy animation. The board wrapper toggles `tidy-animating` for

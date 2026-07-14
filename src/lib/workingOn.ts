@@ -12,9 +12,12 @@ export interface NoteNode {
   x: number;
   y: number;
   color?: string;
-  // Three-state todo cycle: undefined/false-on-both = todo; working=true =
-  // "working on" (blue indicator); done=true = done (mutually exclusive with
-  // working — the click handler always clears the other).
+  /** Persisted dimensions appear after the first explicit resize. Legacy notes
+   * omit both and continue to size from their content. */
+  width?: number;
+  height?: number;
+  // Retained only so old JSON payloads parse without a migration. Status is no
+  // longer rendered, copied, or written by current note interactions.
   working?: boolean;
   done?: boolean;
   // Wiki-style cross-reference id. Format `YYMMDDxx` (date + 2 random
@@ -26,20 +29,26 @@ export interface NoteNode {
 }
 
 /**
- * Note color palette — 8 Morandi tones spaced across the hue wheel so adjacent
- * swatches are clearly distinguishable on warm-cream paper. First entry is the
- * default (matches the original amber accent).
+ * FigJam's concise pastel fill palette. The first entry is the default for new
+ * notes; stored custom colors remain valid even when they are not in this list.
  */
 export const NOTE_COLORS = [
-  "#7a8b66", // sage (default)
-  "#a86810", // amber
-  "#a76e6e", // rose
-  "#6b85a3", // slate blue
-  "#8e6b8e", // plum
-  "#b07b50", // terracotta
-  "#6c7a7a", // teal-gray
-  "#8b8170", // muted
+  "#BDE3FF", // blue (default)
+  "#B7F7C2", // green
+  "#FFE299", // yellow
+  "#FFC7C2", // pink/red
+  "#D9C2FF", // purple
+  "#FFC470", // orange
 ] as const;
+
+export const NOTE_COLOR_LABELS: Record<(typeof NOTE_COLORS)[number], string> = {
+  "#BDE3FF": "blue",
+  "#B7F7C2": "green",
+  "#FFE299": "yellow",
+  "#FFC7C2": "pink",
+  "#D9C2FF": "purple",
+  "#FFC470": "orange",
+};
 
 export const DEFAULT_NOTE_COLOR = NOTE_COLORS[0];
 

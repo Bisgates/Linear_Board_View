@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Handle, NodeResizer, Position, useStore, type NodeProps } from "@xyflow/react";
 import { DEFAULT_NOTE_COLOR, openLocalPath } from "../lib/workingOn";
 
 // Fixed wiki-link blue, deliberately *not* tied to the per-note accent or any
@@ -176,17 +176,17 @@ interface NoteData {
   id: string;
   body: string;
   color?: string;
-  working?: boolean;
-  done?: boolean;
+  width?: number;
+  height?: number;
   autoEdit?: boolean;
+  resizeVisible?: boolean;
   /** This card's wiki-style id (`YYMMDDxx`); empty until migration runs. */
   cardId?: string;
   onCommit?: (patch: {
     body?: string;
     color?: string;
-    working?: boolean;
-    done?: boolean;
   }) => void;
+  onResizeEnd?: (params: { x: number; y: number; width: number; height: number }) => void;
   onEditEnd?: () => void;
   /** Resolves a `[[cardId]]` reference to the corresponding xyflow node id on
    *  the active board, or null if no such card exists. */
@@ -195,19 +195,9 @@ interface NoteData {
   onJumpToCardNode?: (nodeId: string) => void;
 }
 
-// When a note is marked done, swap the saturated accent for a muted gray so the
-// card visibly recedes on the board (Apple Reminders / Things style). Hue is
-// defined per palette in src/index.css.
-const DONE_FRAME_COLOR = "var(--note-done)";
-// "Working on" indicator color — defined per palette so it stays in step with
-// the paper hue. Distinct from any user-pickable swatch in `NOTE_COLORS`.
-const WORKING_COLOR = "var(--note-working)";
-
-// Fixed card width; image display caps to the inner content area below.
+// Legacy notes size from content at this width until the user explicitly
+// resizes them. Persisted dimensions then make the card fill its xyflow node.
 const CARD_W = 280;
-// Inner padding 12px each side = 24 lateral, frame stripe 6+2 = 8 horizontal.
-// Inline images get capped to this so they never spill past the card edge.
-const IMAGE_MAX_W = CARD_W - 8 - 24;
 
 type Props = NodeProps & { data: NoteData };
 
@@ -215,20 +205,79 @@ function NoteCardImpl({ data, selected }: Props) {
   const [editing, setEditing] = useState<boolean>(Boolean(data.autoEdit));
   const [draftBody, setDraftBody] = useState<string>(data.body ?? "");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const [showOverflow, setShowOverflow] = useState(false);
+  const zoom = useStore((state) => state.transform[2]);
 
-  const accent = data.color ?? DEFAULT_NOTE_COLOR;
-  const done = Boolean(data.done);
-  const working = !done && Boolean(data.working);
-  const status: "todo" | "working" | "done" = done ? "done" : working ? "working" : "todo";
-  // The card frame still recedes to gray only when done — "working on" keeps
-  // the user's chosen accent so an in-progress card stays visually full color.
-  const color = done ? DONE_FRAME_COLOR : accent;
-  const handleStyle: React.CSSProperties = {
-    width: 10,
-    height: 10,
-    background: "var(--paper)",
-    border: `1.5px solid ${color}`,
-  };
+  const color = data.color ?? DEFAULT_NOTE_COLOR;
+  const isSized = data.width !== undefined && data.height !== undefined;
+  const imageMaxW = Math.max(80, (data.width ?? CARD_W) - 32);
+  const inverseZoom = 1 / Math.max(0.2, zoom);
+
+  // The overflow cue is based on the actual scroll container rather than a
+  // text-length estimate. This keeps it correct for wrapping, images, fonts,
+  // edits, and cards resized after they were created.
+  const measureOverflow = useCallback(() => {
+    const el = surfaceRef.current;
+    if (!el) {
+      setShowOverflow(false);
+      return;
+    }
+    const hasOverflow = el.scrollHeight > el.clientHeight + 1;
+    const remaining = el.scrollHeight - el.clientHeight - el.scrollTop > 1;
+    setShowOverflow(hasOverflow && remaining);
+  }, []);
+
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+
+    let frame = 0;
+    const scheduleMeasure = () => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        measureOverflow();
+      });
+    };
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(scheduleMeasure) : null;
+    const observed = [
+      surface,
+      ...Array.from(surface.querySelectorAll<HTMLElement>(".note-card__content, img, textarea")),
+    ];
+    observed.forEach((target) => resizeObserver?.observe(target));
+
+    const mutationObserver =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(scheduleMeasure)
+        : null;
+    mutationObserver?.observe(surface, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+
+    const imageListeners: Array<{ image: HTMLImageElement; type: "load" | "error" }> = [];
+    surface.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+      image.addEventListener("load", scheduleMeasure);
+      image.addEventListener("error", scheduleMeasure);
+      imageListeners.push({ image, type: "load" }, { image, type: "error" });
+    });
+    surface.addEventListener("scroll", measureOverflow, { passive: true });
+    document.fonts?.addEventListener("loadingdone", scheduleMeasure);
+    scheduleMeasure();
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      surface.removeEventListener("scroll", measureOverflow);
+      imageListeners.forEach(({ image, type }) => image.removeEventListener(type, scheduleMeasure));
+      document.fonts?.removeEventListener("loadingdone", scheduleMeasure);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [data.body, data.height, data.width, draftBody, editing, measureOverflow]);
 
   // Sync local draft from external data when not editing (server-authoritative
   // replace, undo/redo, paste appending image refs from CanvasBoard, etc.).
@@ -258,8 +307,8 @@ function NoteCardImpl({ data, selected }: Props) {
     return () => cancelAnimationFrame(raf);
   }, [editing]);
 
-  // Autogrow the textarea so long notes expand the card instead of scrolling
-  // internally. Re-run whenever the draft text changes.
+  // Autogrow the textarea to its content. Unsized notes expand naturally;
+  // explicitly resized notes keep their frame and scroll the surface instead.
   useEffect(() => {
     if (!editing) return;
     const el = textareaRef.current;
@@ -294,10 +343,10 @@ function NoteCardImpl({ data, selected }: Props) {
   // that's just an image ref produces a clean inline picture without any
   // surrounding text noise.
   const lines = (data.body ?? "").split("\n");
-  // A line is treated as the "title" only if it sits before any non-empty
-  // content. Pure image refs (`![](...)` only) don't count as a title even
-  // though they're on line 0 — that way a paste-an-image-first card doesn't
-  // stamp its filename-looking ref in bold.
+  // Default styling treats the first real text line as a title. FigJam CSS
+  // deliberately renders the title/body classes identically, without making
+  // the React component aware of the active theme. Pure image refs do not count
+  // as a title candidate.
   const firstTextLineIdx = (() => {
     for (let i = 0; i < lines.length; i++) {
       const trimmed = (lines[i] ?? "").trim();
@@ -308,10 +357,20 @@ function NoteCardImpl({ data, selected }: Props) {
     }
     return -1;
   })();
+  // Preserve outer blank lines in the stored/editable body while letting a
+  // theme hide only their view-mode rows when centering visible content.
+  const firstContentLineIdx = lines.findIndex((line) => line.trim().length > 0);
+  const lastContentLineIdx = (() => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if ((lines[i] ?? "").trim().length > 0) return i;
+    }
+    return -1;
+  })();
   const hasAnyContent = (data.body ?? "").trim().length > 0;
 
   return (
     <div
+      className={`note-card${selected ? " is-selected" : ""}${editing ? " is-editing" : ""}${isSized ? " is-sized" : ""}`}
       onDoubleClick={(e) => {
         if (editing) return;
         e.stopPropagation();
@@ -324,123 +383,41 @@ function NoteCardImpl({ data, selected }: Props) {
         // CanvasBoard, which builds the per-target menu (Copy ID + Delete).
         if (editing) e.stopPropagation();
       }}
-      style={{
-        width: CARD_W,
-        // The outer block is the color "frame" itself; the inner paper card
-        // sits inside with concentric corner radii so the left stripe + top /
-        // right / bottom border curve smoothly into each other (Apple HIG —
-        // nested rounded rects use concentric, not stacked, corners).
-        background: color,
-        padding: "2px 2px 2px 6px",
-        borderRadius: 10,
-        boxShadow: selected
-          ? `0 0 0 3px color-mix(in srgb, ${color} 28%, transparent), 0 4px 14px rgba(0,0,0,0.14)`
-          : "var(--card-shadow)",
-        color: "var(--ink)",
-        cursor: editing ? "text" : "grab",
-        transition: "box-shadow 0.12s",
-      }}
+      style={
+        {
+          "--note-color": color,
+          "--note-handle-size": `${12 * inverseZoom}px`,
+          "--note-handle-border": `${2 * inverseZoom}px`,
+        } as React.CSSProperties
+      }
     >
-      <Handle id="t" type="source" position={Position.Top} style={handleStyle} />
-      <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
-      <Handle id="b" type="source" position={Position.Bottom} style={handleStyle} />
-      <Handle id="l" type="source" position={Position.Left} style={handleStyle} />
+      <NodeResizer
+        isVisible={Boolean(data.resizeVisible)}
+        minWidth={120}
+        minHeight={64}
+        maxWidth={800}
+        maxHeight={600}
+        color="var(--accent)"
+        lineClassName="note-resizer__line"
+        handleClassName="note-resizer__handle"
+        onResizeEnd={(_event, params) => data.onResizeEnd?.(params)}
+      />
+      <Handle id="t" type="source" position={Position.Top} className="note-card__handle" />
+      <Handle id="r" type="source" position={Position.Right} className="note-card__handle" />
+      <Handle id="b" type="source" position={Position.Bottom} className="note-card__handle" />
+      <Handle id="l" type="source" position={Position.Left} className="note-card__handle" />
 
-      <div
-        style={{
-          position: "relative",
-          background: done ? "var(--paper-deep)" : "var(--paper-soft)",
-          // Concentric radii: outer 10 − left offset 6 = 4 for left corners;
-          // outer 10 − top/right/bottom offset 2 = 8 for the others.
-          borderRadius: "4px 8px 8px 4px",
-          padding: "10px 12px",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            fontSize: 10,
-            color,
-            marginBottom: 6,
-            letterSpacing: "0.1em",
-            textTransform: "uppercase",
-            fontWeight: 600,
-            gap: 8,
-          }}
-        >
+      <div ref={surfaceRef} className={`note-card__surface${isSized ? " nowheel" : ""}`}>
+        <div className="note-card__meta">
           {/* Image-only notes (body has only `![](...)` tokens, no real text)
               skip the "Note" label so a paste-an-image card looks like a clean
               picture, not a NOTE-stamped placeholder. */}
-          <span style={{ opacity: firstTextLineIdx >= 0 ? 1 : 0 }}>Note</span>
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={done ? true : working ? "mixed" : false}
-            aria-label={
-              status === "todo"
-                ? "mark as working on"
-                : status === "working"
-                  ? "mark as done"
-                  : "mark as todo"
-            }
-            className="nodrag nopan"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              // Three-state cycle: todo → working → done → todo.
-              if (status === "todo") data.onCommit?.({ working: true, done: false });
-              else if (status === "working") data.onCommit?.({ working: false, done: true });
-              else data.onCommit?.({ working: false, done: false });
-            }}
-            style={{
-              width: 15,
-              height: 15,
-              borderRadius: 4,
-              ...(status === "todo" && {
-                border: "1px solid rgba(26,24,20,0.22)",
-                background: "var(--paper)",
-                boxShadow:
-                  "inset 0 1px 1.5px rgba(26,24,20,0.07), inset 0 0 0 0.5px rgba(255,255,255,0.5)",
-              }),
-              ...(status === "working" && {
-                border: `1.5px solid ${WORKING_COLOR}`,
-                background: "var(--paper)",
-                boxShadow: `inset 0 0 6px 2px color-mix(in srgb, ${WORKING_COLOR} 60%, transparent)`,
-              }),
-              ...(status === "done" && {
-                border: `1px solid ${color}`,
-                background: color,
-                boxShadow: "0 1px 0 rgba(26,24,20,0.06)",
-              }),
-              cursor: "pointer",
-              padding: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              transition: "background 0.14s, border-color 0.14s, box-shadow 0.14s",
-            }}
+          <span
+            className="note-card__label"
+            style={{ opacity: firstTextLineIdx >= 0 ? 1 : 0 }}
           >
-            {status === "done" && (
-              <svg
-                width={11}
-                height={11}
-                viewBox="0 0 10 10"
-                fill="none"
-                stroke="var(--paper)"
-                strokeWidth={2.2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ transform: "rotate(-6deg)" }}
-              >
-                <polyline points="1.5,5.2 4,7.5 8.5,2.4" />
-              </svg>
-            )}
-          </button>
+            Note
+          </span>
         </div>
 
         {editing ? (
@@ -450,39 +427,19 @@ function NoteCardImpl({ data, selected }: Props) {
             data-note-textarea={data.id}
             rows={1}
             placeholder="first line is the title…"
-            className="nodrag nopan"
+            className="note-card__content note-card__textarea nodrag nopan"
             onChange={(e) => setDraftBody(e.target.value)}
             onKeyDown={sharedKeys}
             onBlur={commit}
-            style={{
-              width: "100%",
-              resize: "none",
-              border: "none",
-              background: "transparent",
-              padding: 0,
-              fontFamily: "var(--sans)",
-              fontSize: 13,
-              lineHeight: 1.4,
-              color: "var(--ink-soft)",
-              outline: "none",
-              display: "block",
-              overflow: "hidden",
-            }}
           />
         ) : !hasAnyContent ? (
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              lineHeight: 1.3,
-              color: "var(--muted)",
-              fontStyle: "italic",
-            }}
-          >
+          <div className="note-card__content note-card__placeholder">
             untitled (double-click to edit)
           </div>
         ) : (
-          <div>
+          <div
+            className={`note-card__content note-card__body${firstTextLineIdx < 0 ? " note-card__body--image-only" : ""}`}
+          >
             {lines.map((line, idx) => {
               const isTitleLine = idx === firstTextLineIdx;
               // Treat a "pure image ref" line as a block element with no extra
@@ -491,47 +448,31 @@ function NoteCardImpl({ data, selected }: Props) {
               const isPureImageLine = /^!\[\]\([A-Za-z0-9]+\.(?:jpg|jpeg|png|webp)\)$/.test(
                 line.trim(),
               );
-              const baseStyle: React.CSSProperties = isTitleLine
-                ? {
-                    fontSize: 14,
-                    fontWeight: 600,
-                    lineHeight: 1.3,
-                    color: done ? "var(--muted)" : "var(--ink)",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    textDecoration: done ? "line-through" : "none",
-                    textDecorationColor: done ? "var(--muted)" : undefined,
-                    textDecorationThickness: done ? "1.5px" : undefined,
-                  }
-                : {
-                    fontSize: 12,
-                    color: done ? "var(--muted)" : "var(--ink-soft)",
-                    lineHeight: 1.4,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    textDecoration: done ? "line-through" : "none",
-                    textDecorationColor: done ? "var(--muted)" : undefined,
-                  };
+              const isOuterEmptyLine =
+                !line.trim() && (idx < firstContentLineIdx || idx > lastContentLineIdx);
               if (isPureImageLine) {
                 return (
-                  <div key={idx}>
+                  <div key={idx} className="note-card__image-line">
                     {renderTokens(line, {
-                      accent: color,
+                      accent: "var(--accent)",
                       resolveCardLink: data.resolveCardLink,
                       onJumpToCardNode: data.onJumpToCardNode,
-                      imageMaxW: IMAGE_MAX_W,
+                      imageMaxW,
                     })}
                   </div>
                 );
               }
               return (
-                <div key={idx} style={baseStyle}>
+                <div
+                  key={idx}
+                  className={`note-card__line note-card__line--${isTitleLine ? "title" : "body"}${isOuterEmptyLine ? " note-card__line--outer-empty" : ""}`}
+                >
                   {line
                     ? renderTokens(line, {
-                        accent: color,
+                        accent: "var(--accent)",
                         resolveCardLink: data.resolveCardLink,
                         onJumpToCardNode: data.onJumpToCardNode,
-                        imageMaxW: IMAGE_MAX_W,
+                        imageMaxW,
                       })
                     : " "}
                 </div>
@@ -540,6 +481,11 @@ function NoteCardImpl({ data, selected }: Props) {
           </div>
         )}
       </div>
+      {showOverflow && (
+        <span className="note-card__overflow-indicator" aria-hidden="true">
+          …
+        </span>
+      )}
     </div>
   );
 }

@@ -685,13 +685,13 @@ async fn write_pinned_tabs(app: AppHandle, order: Vec<String>) -> AppResult<()> 
 // WebKit's per-bundle localStorage can be wiped when `npm run release` swaps
 // the .app, so prefs that must survive an upgrade live in the data dir. The
 // payload is a free-form JSON object — today it only carries the selected
-// theme (`{ "theme": "figma" }`), but the shape is deliberately generic so
+// theme (`{ "theme": "figjam" }`), but the shape is deliberately generic so
 // future prefs slot in without a new command pair.
 
 #[tauri::command]
 async fn read_ui_prefs(app: AppHandle) -> AppResult<Value> {
     let p = data_root(&app)?.join("ui_prefs.json");
-    let fallback = serde_json::json!({ "theme": "figma" });
+    let fallback = serde_json::json!({ "theme": "figjam" });
     read_json_or::<Value>(&p, fallback).await
 }
 

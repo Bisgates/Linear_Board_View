@@ -116,8 +116,8 @@ export async function migrateImageNotes(
       y: note.y,
     };
     if (note.color !== undefined) cleaned.color = note.color;
-    if (note.working !== undefined) cleaned.working = note.working;
-    if (note.done !== undefined) cleaned.done = note.done;
+    if (note.width !== undefined) cleaned.width = note.width;
+    if (note.height !== undefined) cleaned.height = note.height;
     if (note.cardId !== undefined) cleaned.cardId = note.cardId;
     next.push(cleaned);
     migrated += 1;

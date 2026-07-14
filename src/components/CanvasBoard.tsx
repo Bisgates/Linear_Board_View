@@ -7,6 +7,7 @@ import {
   Controls,
   MiniMap,
   ConnectionMode,
+  ConnectionLineType,
   MarkerType,
   ViewportPortal,
   useStore,
@@ -20,6 +21,8 @@ import {
   type NodeTypes,
   type Connection,
   useReactFlow,
+  getSmoothStepPath,
+  type ConnectionLineComponentProps,
 } from "@xyflow/react";
 import type { IssueRecord } from "../linear/types";
 import { IssueCard } from "./IssueCard";
@@ -28,8 +31,13 @@ import { NoteCard } from "./NoteCard";
 import { LabeledEdge } from "./LabeledEdge";
 import { BoardContextMenu, type MenuItem } from "./BoardContextMenu";
 import { SHARED_FLOW_PROPS } from "../lib/boardProps";
-import type { BoardData, BoardEdge, GroupBox, RootDirection } from "../lib/workingOn";
-import { DEFAULT_NOTE_COLOR, NOTE_COLORS, shortId } from "../lib/workingOn";
+import type { BoardData, BoardEdge, GroupBox, NoteNode, RootDirection } from "../lib/workingOn";
+import {
+  DEFAULT_NOTE_COLOR,
+  NOTE_COLORS,
+  NOTE_COLOR_LABELS,
+  shortId,
+} from "../lib/workingOn";
 import { saveImageBytes } from "../lib/tauriInvoke";
 import { generateCardId } from "../lib/cardId";
 import type { ClipboardEdge, ClipboardItem, ClipboardPayload } from "../lib/clipboard";
@@ -52,6 +60,7 @@ import {
   pickShortestHandlePair,
   type HandlePair,
 } from "../lib/graphMode";
+import type { ThemeName } from "../lib/theme";
 
 const NODE_TYPES: NodeTypes = {
   issue: IssueCard as unknown as NodeTypes[string],
@@ -158,6 +167,8 @@ interface CanvasBoardProps {
    * viewport to the new content (so switching Working On views doesn't strand
    * the user in empty space). */
   viewKey?: string;
+  /** Active UI theme; edge geometry and markers differ only in FigJam. */
+  theme?: ThemeName;
 }
 
 export interface CanvasBoardHandle {
@@ -187,7 +198,7 @@ function buildNodes(
     });
   }
   for (const note of data.noteNodes) {
-    nodes.push({
+    const node: Node = {
       id: note.id,
       type: "note",
       position: { x: note.x, y: note.y },
@@ -195,20 +206,56 @@ function buildNodes(
         id: note.id,
         body: note.body,
         color: note.color,
-        working: note.working ?? false,
-        done: note.done ?? false,
+        width: note.width,
+        height: note.height,
         autoEdit: note.id === editingNoteId,
         cardId: note.cardId,
       } as unknown as Record<string, unknown>,
       draggable: true,
       selected: note.id === focusedCardId,
-    });
+    };
+    if (note.width !== undefined) node.width = note.width;
+    if (note.height !== undefined) node.height = note.height;
+    nodes.push(node);
   }
   return nodes;
 }
 
 // Default edge color, used as fallback when no preset is specified
 const DEFAULT_EDGE_COLOR = "var(--edge)"; // see --edge in src/index.css
+const FIGJAM_EDGE_COLOR = "#7d7d7d";
+const FIGJAM_EDGE_STROKE_WIDTH = 3.5;
+const FIGJAM_EDGE_BORDER_RADIUS = 18;
+const FIGJAM_EDGE_OFFSET = 22;
+
+function FigJamConnectionLine({
+  fromX,
+  fromY,
+  toX,
+  toY,
+  fromPosition,
+  toPosition,
+  connectionLineStyle,
+}: ConnectionLineComponentProps) {
+  const [path] = getSmoothStepPath({
+    sourceX: fromX,
+    sourceY: fromY,
+    targetX: toX,
+    targetY: toY,
+    sourcePosition: fromPosition,
+    targetPosition: toPosition,
+    borderRadius: FIGJAM_EDGE_BORDER_RADIUS,
+    offset: FIGJAM_EDGE_OFFSET,
+  });
+  return (
+    <path
+      d={path}
+      fill="none"
+      className="react-flow__connection-path"
+      style={connectionLineStyle}
+    />
+  );
+}
 
 // Graph-mode edges: a freshly computed shortest handle pair must beat the
 // currently assigned pair by at least this many pixels before the connection
@@ -222,6 +269,21 @@ const GRAPH_HANDLE_HYSTERESIS_PX = 8;
 const SNAP_THRESHOLD = 10;
 const DEFAULT_CARD_W = 280;
 const DEFAULT_CARD_H = 110;
+
+function clipboardItemSize(item: ClipboardItem): { w: number; h: number } {
+  if (item.kind !== "note") return { w: DEFAULT_CARD_W, h: DEFAULT_CARD_H };
+  const { width, height } = item;
+  const hasSize =
+    typeof width === "number" &&
+    Number.isFinite(width) &&
+    typeof height === "number" &&
+    Number.isFinite(height);
+  if (!hasSize) return { w: DEFAULT_CARD_W, h: DEFAULT_CARD_H };
+  return {
+    w: Math.min(800, Math.max(120, width)),
+    h: Math.min(600, Math.max(64, height)),
+  };
+}
 
 interface Guide {
   axis: "v" | "h";
@@ -602,7 +664,8 @@ function collectDescendants(rootId: string, edges: ReadonlyArray<BoardEdge>): Se
   return out;
 }
 
-function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
+function buildEdges(data: BoardData, editingEdgeId: string | null, theme: ThemeName): Edge[] {
+  const isFigJam = theme === "figjam";
   // Memoize the per-source direction lookup so a board with hundreds of
   // edges sharing one root doesn't climb the incoming chain N times.
   const dirCache = new Map<string, RootDirection>();
@@ -622,20 +685,25 @@ function buildEdges(data: BoardData, editingEdgeId: string | null): Edge[] {
     targetHandle: e.targetHandle,
     type: "labeled",
     markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: DEFAULT_EDGE_COLOR,
-      width: 16,
-      height: 16,
+      type: isFigJam ? MarkerType.Arrow : MarkerType.ArrowClosed,
+      color: isFigJam ? FIGJAM_EDGE_COLOR : DEFAULT_EDGE_COLOR,
+      width: isFigJam ? 22 : 16,
+      height: isFigJam ? 14 : 16,
+      ...(isFigJam ? { strokeWidth: 1.4 } : {}),
     },
     style: {
-      stroke: DEFAULT_EDGE_COLOR,
-      strokeWidth: 1.6,
+      stroke: isFigJam ? FIGJAM_EDGE_COLOR : DEFAULT_EDGE_COLOR,
+      strokeWidth: isFigJam ? FIGJAM_EDGE_STROKE_WIDTH : 1.6,
+      ...(isFigJam ? { strokeLinecap: "round", strokeLinejoin: "round" } : {}),
     } as React.CSSProperties,
     data: {
       label: e.label ?? "",
       editing: editingEdgeId === e.id,
-      borderRadius: 10,
+      borderRadius: isFigJam ? FIGJAM_EDGE_BORDER_RADIUS : 10,
+      offset: isFigJam ? FIGJAM_EDGE_OFFSET : 20,
+      orthogonal: isFigJam,
       direction: lookupDir(e.source),
+      explicitHandles: Boolean(e.sourceHandle || e.targetHandle),
     } as Record<string, unknown>,
   }));
 }
@@ -682,7 +750,7 @@ function NoteSelectionPalette({
 
   return (
     <div
-      className="nodrag nopan"
+      className="note-selection-palette nodrag nopan"
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       style={{
@@ -692,13 +760,6 @@ function NoteSelectionPalette({
         // Anchor the palette's bottom-right corner just above-right of the
         // bbox top-right corner so it floats clearly outside the selection.
         transform: "translate(-100%, calc(-100% - 8px))",
-        display: "flex",
-        gap: 4,
-        padding: "5px 7px",
-        background: "var(--paper)",
-        border: "1px solid var(--hairline)",
-        borderRadius: 6,
-        boxShadow: "0 2px 8px rgba(26,24,20,0.12)",
         zIndex: 50,
       }}
     >
@@ -708,8 +769,10 @@ function NoteSelectionPalette({
           <button
             key={c}
             type="button"
-            aria-label={`color ${c}`}
-            className="nodrag nopan"
+            aria-label={`Set note color to ${NOTE_COLOR_LABELS[c]}`}
+            aria-pressed={active}
+            title={NOTE_COLOR_LABELS[c]}
+            className={`note-selection-palette__swatch nodrag nopan${active ? " is-active" : ""}`}
             onMouseDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -719,13 +782,7 @@ function NoteSelectionPalette({
               onApply(ids, c);
             }}
             style={{
-              width: 14,
-              height: 14,
-              borderRadius: 3,
               background: c,
-              border: active ? "1.5px solid var(--ink)" : "1px solid rgba(26,24,20,0.15)",
-              cursor: "pointer",
-              padding: 0,
             }}
           />
         );
@@ -748,12 +805,14 @@ function BoardInner({
   issueNodeType = "issue",
   onClipboardToast,
   viewKey,
+  theme = "default",
   forwardedRef,
 }: CanvasBoardProps & { forwardedRef?: React.Ref<CanvasBoardHandle> }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   // Board-level keyboard focus — the card that arrow keys / Space / Tab /
   // Shift+Tab act on. Distinct from `selectedIssueId` (which gates the
   // right-hand DetailPanel): arrow nav moves the halo without opening any
@@ -925,11 +984,11 @@ function BoardInner({
   useEffect(() => {
     setEdges((current) => {
       const selectedIds = new Set(current.filter((e) => e.selected).map((e) => e.id));
-      const built = buildEdges(data, editingEdgeId);
+      const built = buildEdges(data, editingEdgeId, theme);
       if (selectedIds.size === 0) return built;
       return built.map((e) => (selectedIds.has(e.id) ? { ...e, selected: true } : e));
     });
-  }, [data, editingEdgeId]);
+  }, [data, editingEdgeId, theme]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((current) => applyEdgeChanges(changes, current));
@@ -949,13 +1008,31 @@ function BoardInner({
       patch: {
         body?: string;
         color?: string;
-        working?: boolean;
-        done?: boolean;
       },
     ) => {
       setData((prev) => ({
         ...prev,
         noteNodes: prev.noteNodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+      }));
+    },
+    [setData],
+  );
+
+  const commitNoteSize = useCallback(
+    (id: string, params: { x: number; y: number; width: number; height: number }) => {
+      setData((prev) => ({
+        ...prev,
+        noteNodes: prev.noteNodes.map((n) =>
+          n.id === id
+            ? {
+                ...n,
+                x: params.x,
+                y: params.y,
+                width: params.width,
+                height: params.height,
+              }
+            : n,
+        ),
       }));
     },
     [setData],
@@ -1067,6 +1144,7 @@ function BoardInner({
   // via the xyflow node wrapper's `style` — sits outside the card's own
   // border-radius so it reads as a halo around the card, not a ring on top.
   const decoratedNodes = useMemo(() => {
+    const selectedNodeCount = nodes.filter((n) => n.selected).length;
     return nodes.map((n) => {
       const isDropTarget = dropTargetId !== null && n.id === dropTargetId;
       const targetAccent =
@@ -1100,16 +1178,17 @@ function BoardInner({
           onCommit: (patch: {
             body?: string;
             color?: string;
-            working?: boolean;
-            done?: boolean;
           }) => commitNote(withStyle.id, patch),
+          resizeVisible: Boolean(withStyle.selected) && selectedNodeCount === 1,
+          onResizeEnd: (params: { x: number; y: number; width: number; height: number }) =>
+            commitNoteSize(withStyle.id, params),
           onEditEnd: noteEditingFinished,
           resolveCardLink,
           onJumpToCardNode: jumpToNode,
         } as unknown as Record<string, unknown>,
       };
     });
-  }, [nodes, dropTargetId, commitNote, noteEditingFinished, resolveCardLink, jumpToNode]);
+  }, [nodes, dropTargetId, commitNote, commitNoteSize, noteEditingFinished, resolveCardLink, jumpToNode]);
 
   // Per-edge currently-assigned handle pair, kept across renders so the 8px
   // hysteresis in pickShortestHandlePair has a "current" to compare against.
@@ -1126,35 +1205,61 @@ function BoardInner({
 
     const out = edges.map((e) => {
       const isGraph = graphNodeIds.has(e.source) && graphNodeIds.has(e.target);
+      const hasExplicitHandles = Boolean(e.sourceHandle || e.targetHandle);
       let graphOverride: Partial<Edge> = {};
       if (isGraph) {
-        const sn = nodeById.get(e.source);
-        const tn = nodeById.get(e.target);
-        if (sn && tn) {
-          liveGraphEdgeIds.add(e.id);
-          const { w: sw, h: sh } = nodeSize(sn);
-          const { w: tw, h: th } = nodeSize(tn);
-          const pair = pickShortestHandlePair(
-            { x: sn.position.x, y: sn.position.y, w: sw, h: sh },
-            { x: tn.position.x, y: tn.position.y, w: tw, h: th },
-            pairs.get(e.id),
-            GRAPH_HANDLE_HYSTERESIS_PX,
-          );
-          pairs.set(e.id, pair);
-          graphOverride = { sourceHandle: pair.s, targetHandle: pair.t };
+        if (!hasExplicitHandles) {
+          const sn = nodeById.get(e.source);
+          const tn = nodeById.get(e.target);
+          if (sn && tn) {
+            liveGraphEdgeIds.add(e.id);
+            const { w: sw, h: sh } = nodeSize(sn);
+            const { w: tw, h: th } = nodeSize(tn);
+            const pair = pickShortestHandlePair(
+              { x: sn.position.x, y: sn.position.y, w: sw, h: sh },
+              { x: tn.position.x, y: tn.position.y, w: tw, h: th },
+              pairs.get(e.id),
+              GRAPH_HANDLE_HYSTERESIS_PX,
+            );
+            pairs.set(e.id, pair);
+            graphOverride = { sourceHandle: pair.s, targetHandle: pair.t };
+          }
         }
-        // Finalized graph look (winner of the candidate bake-off): warm-gray
-        // stroke matching the tree edges but slightly thinner (1.4 vs 1.6px),
-        // solid line, closed arrowhead. The path shape (perpendicular bezier)
-        // lives in LabeledEdge's graph branch.
+        // Default keeps the established, slightly thinner graph stroke.
+        // FigJam normalizes every connection to the same rounded orthogonal
+        // weight, regardless of whether it came from tree or graph mode.
         graphOverride.style = {
-          stroke: DEFAULT_EDGE_COLOR,
-          strokeWidth: 1.4,
+          stroke: theme === "figjam" ? FIGJAM_EDGE_COLOR : DEFAULT_EDGE_COLOR,
+          strokeWidth: theme === "figjam" ? FIGJAM_EDGE_STROKE_WIDTH : 1.4,
         } as React.CSSProperties;
       }
+      const emphasized = theme === "figjam" && (Boolean(e.selected) || hoveredEdgeId === e.id);
+      const style =
+        theme === "figjam"
+          ? ({
+              ...(e.style ?? {}),
+              ...(graphOverride.style ?? {}),
+              stroke: emphasized ? "var(--accent)" : FIGJAM_EDGE_COLOR,
+              strokeWidth: FIGJAM_EDGE_STROKE_WIDTH,
+              strokeLinecap: "round",
+              strokeLinejoin: "round",
+            } as React.CSSProperties)
+          : graphOverride.style ?? e.style;
+      const markerEnd =
+        theme === "figjam"
+          ? {
+              type: MarkerType.Arrow,
+              color: emphasized ? "var(--accent)" : FIGJAM_EDGE_COLOR,
+              width: 22,
+              height: 14,
+              strokeWidth: 1.4,
+            }
+          : e.markerEnd;
       return {
         ...e,
         ...graphOverride,
+        style,
+        markerEnd,
         data: {
           ...(e.data ?? {}),
           graph: isGraph,
@@ -1169,7 +1274,7 @@ function BoardInner({
       if (!liveGraphEdgeIds.has(id)) pairs.delete(id);
     }
     return out;
-  }, [edges, nodes, graphNodeIds, commitEdgeLabel, edgeEditingFinished]);
+  }, [edges, nodes, graphNodeIds, theme, hoveredEdgeId, commitEdgeLabel, edgeEditingFinished]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
@@ -2334,14 +2439,20 @@ function BoardInner({
         for (const it of payload.items) {
           const x = center.x + it.dx;
           const y = center.y + it.dy;
+          const { w, h } = clipboardItemSize(it);
           if (x < pastedMinX) pastedMinX = x;
-          if (x + W > pastedMaxX) pastedMaxX = x + W;
+          if (x + w > pastedMaxX) pastedMaxX = x + w;
           if (y < pastedMinY) pastedMinY = y;
-          if (y + H > pastedMaxY) pastedMaxY = y + H;
+          if (y + h > pastedMaxY) pastedMaxY = y + h;
         }
         const existingRects: Array<{ x: number; y: number; w: number; h: number }> = [];
         for (const n of prev.noteNodes) {
-          existingRects.push({ x: n.x, y: n.y, w: W, h: H });
+          existingRects.push({
+            x: n.x,
+            y: n.y,
+            w: n.width ?? W,
+            h: n.height ?? H,
+          });
         }
         for (const pos of Object.values(prev.issueMembers)) {
           existingRects.push({ x: pos.x, y: pos.y, w: W, h: H });
@@ -2365,8 +2476,8 @@ function BoardInner({
             : { x: window.innerWidth, y: window.innerHeight },
         );
         const PASTE_GAP = 80;
-        const stepX = W + PASTE_GAP;
-        const stepY = H + PASTE_GAP;
+        const stepX = Math.max(W, pastedMaxX - pastedMinX) + PASTE_GAP;
+        const stepY = Math.max(H, pastedMaxY - pastedMinY) + PASTE_GAP;
         const candidates: Array<{ dx: number; dy: number }> = [
           { dx: 0, dy: 0 },
           { dx: stepX, dy: 0 },
@@ -2429,7 +2540,7 @@ function BoardInner({
               id = shortId("n");
               localIdxToNewId[idx] = id;
             }
-            const note: { id: string; body: string; x: number; y: number; color?: string; working?: boolean; done?: boolean; cardId?: string } = {
+            const note: NoteNode = {
               id,
               body: it.body,
               x,
@@ -2437,8 +2548,11 @@ function BoardInner({
               cardId: mintCardIdFor(noteNodes),
             };
             if (it.color) note.color = it.color;
-            if (it.working) note.working = true;
-            if (it.done) note.done = true;
+            if (it.width !== undefined && it.height !== undefined) {
+              const size = clipboardItemSize(it);
+              note.width = size.w;
+              note.height = size.h;
+            }
             noteNodes.push(note);
             existingNoteIds.add(id);
             addedNodeIds.add(id);
@@ -2536,15 +2650,21 @@ function BoardInner({
         if (selectedNodes.length === 0) return;
         evt.preventDefault();
 
-        // Group centroid for relative offsets.
-        let cx = 0;
-        let cy = 0;
+        // Geometric centre of the selected bounding box. Resized notes must
+        // contribute their real extents so paste preserves the group layout.
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
         for (const n of selectedNodes) {
-          cx += n.position.x;
-          cy += n.position.y;
+          const { w, h } = nodeSize(n);
+          minX = Math.min(minX, n.position.x);
+          minY = Math.min(minY, n.position.y);
+          maxX = Math.max(maxX, n.position.x + w);
+          maxY = Math.max(maxY, n.position.y + h);
         }
-        cx /= selectedNodes.length;
-        cy /= selectedNodes.length;
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
 
         const items: ClipboardItem[] = [];
         const idToLocalIdx = new Map<string, number>();
@@ -2564,11 +2684,13 @@ function BoardInner({
               kind: "note",
               body: note.body,
               color: note.color,
-              working: note.working,
-              done: note.done,
               dx,
               dy,
             };
+            if (note.width !== undefined && note.height !== undefined) {
+              item.width = note.width;
+              item.height = note.height;
+            }
             if (dir) item.direction = dir;
             items.push(item);
           } else {
@@ -3018,6 +3140,13 @@ function BoardInner({
     [localCoords, deleteEdge],
   );
 
+  const onEdgeMouseEnter = useCallback((_evt: React.MouseEvent, edge: Edge) => {
+    setHoveredEdgeId(edge.id);
+  }, []);
+  const onEdgeMouseLeave = useCallback((_evt: React.MouseEvent, edge: Edge) => {
+    setHoveredEdgeId((current) => (current === edge.id ? null : current));
+  }, []);
+
   const onEdgeDoubleClick = useCallback((_evt: React.MouseEvent, edge: Edge) => {
     setEditingEdgeId(edge.id);
   }, []);
@@ -3087,9 +3216,24 @@ function BoardInner({
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
         onEdgeDoubleClick={onEdgeDoubleClick}
+        onEdgeMouseEnter={onEdgeMouseEnter}
+        onEdgeMouseLeave={onEdgeMouseLeave}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         connectionMode={ConnectionMode.Loose}
+        connectionLineType={ConnectionLineType.SmoothStep}
+        connectionLineComponent={theme === "figjam" ? FigJamConnectionLine : undefined}
+        connectionLineStyle={
+          theme === "figjam"
+            ? {
+                stroke: "var(--accent)",
+                strokeWidth: FIGJAM_EDGE_STROKE_WIDTH,
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+              }
+            : { stroke: "var(--accent)", strokeWidth: 1.8 }
+        }
+        connectionRadius={30}
         nodesConnectable
         nodesFocusable={false}
         edgesFocusable
@@ -3102,6 +3246,7 @@ function BoardInner({
           {groupFrames.map((f) => (
             <div
               key={`grp-${f.id}`}
+              className="board-group-frame"
               onPointerDown={(e) => startGroupDrag(e, f.id)}
               style={{
                 position: "absolute",
@@ -3109,11 +3254,8 @@ function BoardInner({
                 top: f.y,
                 width: f.w,
                 height: f.h,
-                border: "1.5px dashed var(--selection-dash)",
-                borderRadius: 10,
-                background: "color-mix(in srgb, var(--selection-dash) 5%, transparent)",
-                // Pointer-events on so the empty interior (and the dashed
-                // border) drags the whole group; zIndex -1 keeps cards on top
+                // Pointer-events on so the empty interior and border drag the
+                // whole group; zIndex -1 keeps cards on top
                 // so clicking a card still hits the card, not the frame.
                 pointerEvents: "auto",
                 cursor: "move",

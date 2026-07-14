@@ -97,11 +97,11 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // UI theme. "default" (warm-soft) uses no `data-theme` attribute; "figma"
-  // applies the FigJam token overrides and is now the boot default for fresh
-  // installs. Persisted to `<data>/ui_prefs.json`.
-  // Hydration is async (brief figma-theme flash on launch is acceptable).
-  const [theme, setTheme] = useState<ThemeName>("figma");
+  // UI theme. "default" is the Figma-based palette; "figjam" keeps that
+  // palette but flattens note cards into FigJam-style text blocks. Persisted to
+  // `<data>/ui_prefs.json`. Hydration is async; FigJam is also the new-install
+  // fallback so the first paint matches the eventual persisted preference.
+  const [theme, setTheme] = useState<ThemeName>("figjam");
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
@@ -876,6 +876,7 @@ export default function App() {
               )}
               <CanvasBoard
                 viewKey="agent_tmp"
+                theme={theme}
                 displayedIssues={opusIssues}
                 data={allIssuesBoard.data}
                 loaded={allIssuesBoard.loaded}
@@ -894,6 +895,7 @@ export default function App() {
             <CanvasBoard
               ref={allIssuesBoardRef}
               viewKey="all"
+              theme={theme}
               displayedIssues={filtered}
               data={allIssuesBoard.data}
               loaded={allIssuesBoard.loaded}
@@ -910,6 +912,7 @@ export default function App() {
             <CanvasBoard
               ref={customBoardRef}
               viewKey={cv.activeId ? `cv-${cv.activeId}` : "cv-loading"}
+              theme={theme}
               displayedIssues={customDisplayed}
               data={customBoard.data}
               loaded={customBoard.loaded}
@@ -925,6 +928,7 @@ export default function App() {
             <CanvasBoard
               ref={workingOnBoardRef}
               viewKey={wov.activeId ? `wo-${wov.activeId}` : "wo-loading"}
+              theme={theme}
               displayedIssues={workingOnDisplayed}
               data={workingOn.data}
               loaded={workingOn.loaded}

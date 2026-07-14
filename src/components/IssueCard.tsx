@@ -66,17 +66,17 @@ function IssueCardImpl({ data, selected }: Props) {
       style={{
         width: 280,
         background: "var(--card)",
-        // Default theme: 2px project-colour frame. The figma theme drops it
-        // via `--issue-border: none`; the fallback keeps the project border
-        // (nested var so `projColor` stays a live `var(--proj-N)` ref).
+        // The Figma-based palette removes the project-colour frame via
+        // `--issue-border: none`; the fallback keeps the project border for
+        // consumers that do not provide that token.
         border: `var(--issue-border, 2px solid ${projColor})`,
         borderRadius: 8,
         padding: "10px 12px",
         // Selected glow tints the project frame colour at ~28% so it matches
         // whichever project this card belongs to. color-mix is required because
         // projColor is a `var(--proj-N)` ref, so hex+alpha concatenation
-        // (`${projColor}40`) wouldn't produce a valid CSS colour. The figma
-        // theme swaps in a crisp blue ring via `--issue-selected-shadow`.
+        // (`${projColor}40`) wouldn't produce a valid CSS colour. The active
+        // palette swaps in a crisp blue ring via `--issue-selected-shadow`.
         boxShadow: selected
           ? `var(--issue-selected-shadow, 0 0 0 3px color-mix(in srgb, ${projColor} 28%, transparent), 0 4px 14px rgba(0,0,0,0.14))`
           : "var(--card-shadow)",

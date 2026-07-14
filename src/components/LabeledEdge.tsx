@@ -16,6 +16,10 @@ interface LabeledEdgeData {
   onEditEnd?: () => void;
   /** Border radius for path corners (defaults to 10) */
   borderRadius?: number;
+  /** Distance from each handle before the first orthogonal bend. */
+  offset?: number;
+  /** Use rounded orthogonal routing even for graph-mode edges. */
+  orthogonal?: boolean;
   /**
    * Growth direction of the tree this edge belongs to. Determines which
    * edge of the parent the stem leaves from and which edge of the child
@@ -31,6 +35,8 @@ interface LabeledEdgeData {
    * smoothstep routing entirely.
    */
   graph?: boolean;
+  /** Manual connection persisted with concrete t/r/b/l handle ids. */
+  explicitHandles?: boolean;
 }
 
 /** Outward unit normal of a card side, by xyflow handle Position. */
@@ -202,6 +208,9 @@ function LabeledEdgeImpl(props: EdgeProps) {
   // drag because useInternalNode subscribes to position changes. Fall back to
   // xyflow's handle-derived props on the first frame when measure isn't ready.
   const isGraph = Boolean(data.graph);
+  const hasExplicitHandles = Boolean(
+    data.explicitHandles || props.sourceHandleId || props.targetHandleId,
+  );
 
   let sx = props.sourceX;
   let sy = props.sourceY;
@@ -212,7 +221,14 @@ function LabeledEdgeImpl(props: EdgeProps) {
   let centerX: number | undefined;
   let centerY: number | undefined;
   const dir: EdgeDir = (data.direction as EdgeDir | undefined) ?? "right";
-  if (!isGraph && sourceNode && targetNode && sourceNode.measured?.width && targetNode.measured?.width) {
+  if (
+    !isGraph &&
+    !hasExplicitHandles &&
+    sourceNode &&
+    targetNode &&
+    sourceNode.measured?.width &&
+    targetNode.measured?.width
+  ) {
     const p = getEdgeParams(sourceNode, targetNode, dir);
     sx = p.sx;
     sy = p.sy;
@@ -230,13 +246,14 @@ function LabeledEdgeImpl(props: EdgeProps) {
   // bezier won the candidate bake-off (vs straight / rounded-step / soft
   // bezier) — it leaves the card edge at a right angle with real tension.
   //
-  // Tree edges keep the smoothstep routing untouched: borderRadius softens
-  // the corners; centerX makes every edge from the same source share its bend
-  // column, which produces the visual stem when a parent has many children.
+  // Auto tree edges retain root-direction routing and a shared bend column.
+  // Explicit tree edges use xyflow's handle-derived props directly, so a line
+  // drawn from `t` to `r` stays attached to those exact sides after moves and
+  // resizes while still receiving the same rounded smooth-step treatment.
   let path: string;
   let labelX: number;
   let labelY: number;
-  if (isGraph) {
+  if (isGraph && !data.orthogonal) {
     [path, labelX, labelY] = getPerpendicularBezierPath(sx, sy, tx, ty, sourcePos, targetPos);
   } else {
     [path, labelX, labelY] = getSmoothStepPath({
@@ -247,6 +264,7 @@ function LabeledEdgeImpl(props: EdgeProps) {
       sourcePosition: sourcePos,
       targetPosition: targetPos,
       borderRadius: data.borderRadius ?? 10,
+      offset: data.offset ?? 20,
       centerX,
       centerY,
     });
